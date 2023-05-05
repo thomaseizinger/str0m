@@ -39,6 +39,13 @@ rouille = { version = "3.5.0", features = ["ssl"] }
 serde_json = "1.0"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "std"] }
 systemstat = "0.2.2"
+multiaddr = "=0.17.0"
+hex = "0.4.3"
+sha2 = "0.10.6"
+multihash = "0.17.0"
+libp2p-identity = { version = "0.1.1", features = ["ed25519", "peerid"] }
+serde = "1.0.160"
+tinytemplate = "1.2.1"
 
 [target.'cfg(fuzzing)'.dev-dependencies]
 fuzzcheck = "0.12"

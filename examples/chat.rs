@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate tracing;
 
+use multiaddr::{Multiaddr, Protocol};
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
 use std::ops::Deref;
@@ -10,16 +11,20 @@ use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::fingerprint::Fingerprint;
 use rouille::Server;
 use rouille::{Request, Response};
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::channel::{ChannelData, ChannelId};
 use str0m::media::MediaKind;
 use str0m::media::{Direction, KeyframeRequest, MediaData, Mid, Rid};
-use str0m::Event;
+use str0m::{Event, net};
 use str0m::{net::Receive, Candidate, IceConnectionState, Input, Output, Rtc, RtcError};
+use str0m::net::DatagramRecv;
 
+mod fingerprint;
 mod util;
+mod sdp;
 
 fn init_log() {
     use std::env;
@@ -41,6 +46,11 @@ pub fn main() {
     let certificate = include_bytes!("cer.pem").to_vec();
     let private_key = include_bytes!("key.pem").to_vec();
 
+    let mut bytes = [0u8; 32];
+
+    let keypair =
+        libp2p_identity::Keypair::ed25519_from_bytes(&mut bytes).expect("a valid keypair");
+
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
     let host_addr = util::select_host_address();
 
@@ -48,9 +58,20 @@ pub fn main() {
 
     // Spin up a UDP socket for the RTC. All WebRTC traffic is going to be multiplexed over this single
     // server socket. Clients are identified via their respective remote (UDP) socket address.
-    let socket = UdpSocket::bind(format!("{host_addr}:0")).expect("binding a random UDP port");
+    let socket = UdpSocket::bind(format!("{host_addr}:9999")).expect("binding a random UDP port");
     let addr = socket.local_addr().expect("a local socket adddress");
     info!("Bound UDP port: {}", addr);
+
+    let fingerprint = Fingerprint::from_certificate(&certificate);
+
+    let multiaddr = Multiaddr::empty()
+        .with(Protocol::from(addr.ip()))
+        .with(Protocol::Udp(addr.port()))
+        .with(Protocol::WebRTC)
+        .with(Protocol::Certhash(fingerprint.to_multihash()))
+        .with(Protocol::P2p(keypair.public().to_peer_id().into()));
+
+    info!("Listening on {multiaddr}");
 
     // The run loop is on a separate thread to the web server.
     thread::spawn(move || run(socket, rx));
@@ -61,7 +82,7 @@ pub fn main() {
         certificate,
         private_key,
     )
-    .expect("starting the web server");
+        .expect("starting the web server");
 
     let port = server.server_addr().port();
     info!("Connect a browser to https://{:?}:{:?}", addr.ip(), port);
@@ -104,24 +125,13 @@ fn web_request(request: &Request, addr: SocketAddr, tx: SyncSender<Rtc>) -> Resp
 
 /// This is the "main run loop" that handles all clients, reads and writes UdpSocket traffic,
 /// and forwards media data between clients.
-fn run(socket: UdpSocket, rx: Receiver<Rtc>) -> Result<(), RtcError> {
+fn run(socket: UdpSocket, _rx: Receiver<Rtc>) -> Result<(), RtcError> {
     let mut clients: Vec<Client> = vec![];
     let mut buf = vec![0; 2000];
 
     loop {
         // Clean out disconnected clients
         clients.retain(|c| c.rtc.is_alive());
-
-        // Spawn new incoming clients from the web server thread.
-        if let Some(mut client) = spawn_new_client(&rx) {
-            // Add incoming tracks present in other already connected clients.
-            for track in clients.iter().flat_map(|c| c.tracks_in.iter()) {
-                let weak = Arc::downgrade(track);
-                client.handle_track_open(weak);
-            }
-
-            clients.push(client);
-        }
 
         // Poll all clients, and get propagated events as a result.
         let to_propagate: Vec<_> = clients.iter_mut().map(|c| c.poll_output(&socket)).collect();
@@ -151,15 +161,27 @@ fn run(socket: UdpSocket, rx: Receiver<Rtc>) -> Result<(), RtcError> {
             .expect("setting socket read timeout");
 
         if let Some(input) = read_socket_input(&socket, &mut buf) {
-            // The rtc.accepts() call is how we demultiplex the incoming packet to know which
-            // Rtc instance the traffic belongs to.
-            if let Some(client) = clients.iter_mut().find(|c| c.accepts(&input)) {
-                // We found the client that accepts the input.
-                client.handle_input(input);
-            } else {
-                // This is quite common because we don't get the Rtc instance via the mpsc channel
-                // quickly enough before the browser send the first STUN.
-                debug!("No client accepts UDP input: {:?}", input);
+            match input {
+                Input::Timeout(_) => {}
+                Input::Receive(_, net::Receive {
+                    source, destination, contents: DatagramRecv::Stun(message)
+                }) => {
+                    if let Some((u, p)) = message.split_username() {
+                        info!("Received STUN from {}:{}", u, p);
+
+
+                        let mut rtc = Rtc::builder().set_ice_lite(true).build();
+
+                        let offer = SdpOffer::from_sdp_string(&dbg!(sdp::offer(destination, &format!("{u}:{p}")))).unwrap();
+                        let answer = rtc.sdp_api().accept_offer(dbg!(offer)).unwrap();
+
+                        // TODO: Set negotiaed to true
+                        let noise_channel_id = dbg!(rtc.sdp_api().add_channel("".to_owned()));
+
+                        clients.push(Client::new(rtc, noise_channel_id));
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -171,14 +193,19 @@ fn run(socket: UdpSocket, rx: Receiver<Rtc>) -> Result<(), RtcError> {
     }
 }
 
-/// Receive new clients from the receiver and create new Client instances.
-fn spawn_new_client(rx: &Receiver<Rtc>) -> Option<Client> {
-    // try_recv here won't lock up the thread.
-    match rx.try_recv() {
-        Ok(rtc) => Some(Client::new(rtc)),
-        Err(TryRecvError::Empty) => None,
-        _ => panic!("Receiver<Rtc> disconnected"),
-    }
+#[test]
+fn sdp_parse_test() {
+    let sdp = r#"v=0
+o=- 123456789 0 IN IP4 192.0.2.1
+s=Example SDP Offer
+t=0 0
+a=ice-lite
+a=rtcp-mux
+m=audio 50000 RTP/AVP 0
+a=rtpmap:0 PCMU/8000
+"#;
+
+    let offer = SdpOffer::from_sdp_string(sdp).unwrap();
 }
 
 fn propagate(clients: &mut [Client], to_propagate: Vec<Propagated>) {
@@ -250,6 +277,7 @@ struct Client {
     tracks_in: Vec<Arc<TrackIn>>,
     tracks_out: Vec<TrackOut>,
     chosen_rid: Option<Rid>,
+    noise_channel_id: ChannelId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,11 +321,12 @@ impl TrackOut {
 }
 
 impl Client {
-    fn new(rtc: Rtc) -> Client {
+    fn new(rtc: Rtc, noise_channel_id: ChannelId) -> Client {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
         let next_id = ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         Client {
             id: ClientId(next_id),
+            noise_channel_id,
             rtc,
             pending: None,
             cid: None,
@@ -404,11 +433,11 @@ impl Client {
     fn handle_incoming_keyframe_req(&self, mut req: KeyframeRequest) -> Propagated {
         // Need to figure out the track_in mid that needs to handle the keyframe request.
         let Some(track_out) = self.tracks_out.iter().find(|t| t.mid() == Some(req.mid)) else {
-                return Propagated::Noop;
-            };
+            return Propagated::Noop;
+        };
         let Some(track_in) = track_out.track_in.upgrade() else {
-                return Propagated::Noop;
-            };
+            return Propagated::Noop;
+        };
 
         // This is the rid picked from incoming mediadata, and to which we need to
         // send the keyframe request.
@@ -445,10 +474,10 @@ impl Client {
         };
 
         let Some(mut channel) = self
-                .cid
-                .and_then(|id| self.rtc.channel(id)) else {
-                    return false;
-                };
+            .cid
+            .and_then(|id| self.rtc.channel(id)) else {
+            return false;
+        };
 
         let json = serde_json::to_string(&offer).unwrap();
         channel
@@ -525,10 +554,10 @@ impl Client {
             .iter()
             .find(|o| o.track_in.upgrade().filter(|i|
                 i.origin == origin &&
-                i.mid == data.mid).is_some())
+                    i.mid == data.mid).is_some())
             .and_then(|o| o.mid()) else {
-                return;
-            };
+            return;
+        };
 
         let Some(mut media) = self.rtc.media(mid) else {
             return;
@@ -581,7 +610,6 @@ impl Client {
 
 /// Events propagated between client.
 #[allow(clippy::large_enum_variant)]
-
 enum Propagated {
     /// When we have nothing to propagate.
     Noop,
