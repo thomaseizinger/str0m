@@ -3,7 +3,7 @@ extern crate tracing;
 
 use multiaddr::{Multiaddr, Protocol};
 use std::io::ErrorKind;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use crate::fingerprint::Fingerprint;
 use rouille::Server;
 use rouille::{Request, Response};
-use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
-use str0m::channel::{ChannelData, ChannelId};
+use str0m::change::{IceCreds, SdpAnswer, SdpOffer, SdpPendingOffer};
+use str0m::channel::{ChannelConfig, ChannelData, ChannelId};
 use str0m::media::MediaKind;
 use str0m::media::{Direction, KeyframeRequest, MediaData, Mid, Rid};
 use str0m::net::DatagramRecv;
@@ -52,7 +52,7 @@ pub fn main() {
         libp2p_identity::Keypair::ed25519_from_bytes(&mut bytes).expect("a valid keypair");
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
-    let host_addr = util::select_host_address();
+    let host_addr = Ipv4Addr::new(192, 168, 1, 16); // TODO: This needs to be a local address, I had two interfaces hence this is hardcoded.
 
     let (tx, rx) = mpsc::sync_channel(1);
 
@@ -132,7 +132,7 @@ fn run(socket: UdpSocket, _rx: Receiver<Rtc>) -> Result<(), RtcError> {
 
     loop {
         // Clean out disconnected clients
-        clients.retain(|c| c.rtc.is_alive());
+        // clients.retain(|c| c.rtc.is_alive());
 
         // Poll all clients, and get propagated events as a result.
         let to_propagate: Vec<_> = clients.iter_mut().map(|c| c.poll_output(&socket)).collect();
@@ -176,22 +176,28 @@ fn run(socket: UdpSocket, _rx: Receiver<Rtc>) -> Result<(), RtcError> {
                         info!("Received STUN from {}:{}", u, p);
 
                         let mut rtc = Rtc::builder().set_ice_lite(true).build();
-
-                        let offer = SdpOffer::from_sdp_string(&sdp::offer(
-                            destination,
-                            &format!("{u}:{p}"),
-                        ))
-                        .unwrap();
-
-                        let _answer = rtc.sdp_api().accept_offer(offer).unwrap();
-
-                        // TODO: Set negotiaed to true
-                        let noise_channel_id = rtc.sdp_api().add_channel("".to_owned());
+                        rtc.add_remote_candidate(Candidate::host(source).unwrap());
+                        rtc.add_local_candidate(Candidate::host(destination).unwrap());
+                        rtc.direct_api().set_remote_ice_credentials(IceCreds {
+                            ufrag: u.to_owned(),
+                            pass: p.to_owned(),
+                        });
+                        // rtc.direct_api().start_dtls(true).unwrap();
+                        let noise_channel_id =
+                            rtc.direct_api().create_data_channel(ChannelConfig {
+                                label: "".to_string(),
+                                ordered: false,
+                                reliability: Default::default(),
+                                negotiated: Some(0),
+                                protocol: "".to_string(),
+                            });
 
                         clients.push(Client::new(rtc, noise_channel_id));
                     }
                 }
-                _ => {}
+                other => {
+                    dbg!(other);
+                }
             }
         }
 
@@ -350,6 +356,8 @@ impl Client {
     fn handle_output(&mut self, output: Output, socket: &UdpSocket) -> Propagated {
         match output {
             Output::Transmit(transmit) => {
+                dbg!(&transmit);
+
                 socket
                     .send_to(&transmit.contents, transmit.destination)
                     .expect("sending UDP data");
