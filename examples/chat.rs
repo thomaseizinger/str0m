@@ -173,8 +173,10 @@ fn run(socket: UdpSocket, _rx: Receiver<Rtc>) -> Result<(), RtcError> {
 
                         let mut rtc = Rtc::builder().set_ice_lite(true).build();
 
-                        let offer = SdpOffer::from_sdp_string(&dbg!(sdp::offer(destination, &format!("{u}:{p}")))).unwrap();
-                        let answer = rtc.sdp_api().accept_offer(dbg!(offer)).unwrap();
+                        let offer = SdpOffer::from_sdp_string(&sdp::offer(destination, &format!("{u}:{p}"))).unwrap();
+
+
+                        let answer = rtc.sdp_api().accept_offer(offer).unwrap();
 
                         // TODO: Set negotiaed to true
                         let noise_channel_id = dbg!(rtc.sdp_api().add_channel("".to_owned()));

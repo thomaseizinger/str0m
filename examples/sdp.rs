@@ -126,6 +126,7 @@ o=- 0 0 IN {ip_version} {target_ip}
 s=-
 c=IN {ip_version} {target_ip}
 t=0 0
+a=group:BUNDLE 0
 m=application {target_port} UDP/DTLS/SCTP webrtc-datachannel
 a=mid:0
 a=ice-options:ice2
