@@ -21,15 +21,11 @@
 use serde::Serialize;
 use tinytemplate::TinyTemplate;
 
-use std::net::{IpAddr, SocketAddr};
 use crate::fingerprint::Fingerprint;
+use std::net::{IpAddr, SocketAddr};
 
 /// Creates the SDP answer used by the client.
-pub fn answer(
-    addr: SocketAddr,
-    server_fingerprint: &Fingerprint,
-    client_ufrag: &str,
-) -> String {
+pub fn answer(addr: SocketAddr, server_fingerprint: &Fingerprint, client_ufrag: &str) -> String {
     render_description(
         SERVER_SESSION_DESCRIPTION,
         addr,
@@ -47,7 +43,8 @@ pub fn offer(addr: SocketAddr, client_ufrag: &str) -> String {
         addr,
         &Fingerprint::FF,
         client_ufrag,
-    )}
+    )
+}
 
 // An SDP message that constitutes the offer.
 //

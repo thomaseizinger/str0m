@@ -18,13 +18,13 @@ use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::channel::{ChannelData, ChannelId};
 use str0m::media::MediaKind;
 use str0m::media::{Direction, KeyframeRequest, MediaData, Mid, Rid};
-use str0m::{Event, net};
-use str0m::{net::Receive, Candidate, IceConnectionState, Input, Output, Rtc, RtcError};
 use str0m::net::DatagramRecv;
+use str0m::{net, Event};
+use str0m::{net::Receive, Candidate, IceConnectionState, Input, Output, Rtc, RtcError};
 
 mod fingerprint;
-mod util;
 mod sdp;
+mod util;
 
 fn init_log() {
     use std::env;
@@ -82,7 +82,7 @@ pub fn main() {
         certificate,
         private_key,
     )
-        .expect("starting the web server");
+    .expect("starting the web server");
 
     let port = server.server_addr().port();
     info!("Connect a browser to https://{:?}:{:?}", addr.ip(), port);
@@ -139,11 +139,11 @@ fn run(socket: UdpSocket, _rx: Receiver<Rtc>) -> Result<(), RtcError> {
         let timeouts: Vec<_> = to_propagate.iter().filter_map(|p| p.as_timeout()).collect();
 
         // We keep propagating client events until all clients respond with a timeout.
-        if to_propagate.len() > timeouts.len() {
-            propagate(&mut clients, to_propagate);
-            // Start over to propagate more client data until all are timeouts.
-            continue;
-        }
+        // if to_propagate.len() > timeouts.len() {
+        //     propagate(&mut clients, to_propagate);
+        //     // Start over to propagate more client data until all are timeouts.
+        //     continue;
+        // }
 
         // Timeout in case we have no clients. We can't wait forever since we need to keep
         // polling the spawn_new_clients to discover a client.
@@ -164,22 +164,29 @@ fn run(socket: UdpSocket, _rx: Receiver<Rtc>) -> Result<(), RtcError> {
         if let Some(input) = read_socket_input(&socket, &mut buf) {
             match input {
                 Input::Timeout(_) => {}
-                Input::Receive(_, net::Receive {
-                    source, destination, contents: DatagramRecv::Stun(message)
-                }) => {
+                Input::Receive(
+                    _,
+                    net::Receive {
+                        source,
+                        destination,
+                        contents: DatagramRecv::Stun(message),
+                    },
+                ) => {
                     if let Some((u, p)) = message.split_username() {
                         info!("Received STUN from {}:{}", u, p);
 
-
                         let mut rtc = Rtc::builder().set_ice_lite(true).build();
 
-                        let offer = SdpOffer::from_sdp_string(&sdp::offer(destination, &format!("{u}:{p}"))).unwrap();
+                        let offer = SdpOffer::from_sdp_string(&sdp::offer(
+                            destination,
+                            &format!("{u}:{p}"),
+                        ))
+                        .unwrap();
 
-
-                        let answer = rtc.sdp_api().accept_offer(offer).unwrap();
+                        let _answer = rtc.sdp_api().accept_offer(offer).unwrap();
 
                         // TODO: Set negotiaed to true
-                        let noise_channel_id = dbg!(rtc.sdp_api().add_channel("".to_owned()));
+                        let noise_channel_id = rtc.sdp_api().add_channel("".to_owned());
 
                         clients.push(Client::new(rtc, noise_channel_id));
                     }
@@ -209,35 +216,6 @@ a=rtpmap:0 PCMU/8000
 "#;
 
     let offer = SdpOffer::from_sdp_string(sdp).unwrap();
-}
-
-fn propagate(clients: &mut [Client], to_propagate: Vec<Propagated>) {
-    for p in to_propagate {
-        let Some(client_id) = p.client_id() else {
-            // If the event doesn't have a client id, it can't be propagated,
-            // (it's either a noop or a timeout).
-            continue;
-        };
-
-        for client in &mut *clients {
-            if client.id == client_id {
-                // Do not propagate to originating client.
-                continue;
-            }
-
-            match &p {
-                Propagated::TrackOpen(_, track_in) => client.handle_track_open(track_in.clone()),
-                Propagated::MediaData(_, data) => client.handle_media_data(client_id, data),
-                Propagated::KeyframeRequest(_, req, origin, mid_in) => {
-                    // Only one origin client handles the keyframe request.
-                    if *origin == client.id {
-                        client.handle_keyframe_request(*req, *mid_in)
-                    }
-                }
-                Propagated::Noop | Propagated::Timeout(_) => {}
-            }
-        }
-    }
 }
 
 fn read_socket_input<'a>(socket: &UdpSocket, buf: &'a mut Vec<u8>) -> Option<Input<'a>> {
@@ -359,12 +337,6 @@ impl Client {
             return Propagated::Noop;
         }
 
-        // Incoming tracks from other clients cause new entries in track_out that
-        // need SDP negotiation with the remote peer.
-        if self.negotiate_if_needed() {
-            return Propagated::Noop;
-        }
-
         match self.rtc.poll_output() {
             Ok(output) => self.handle_output(output, socket),
             Err(e) => {
@@ -393,223 +365,23 @@ impl Client {
                     }
                     Propagated::Noop
                 }
-                Event::MediaAdded(e) => self.handle_media_added(e.mid, e.kind),
-                Event::MediaData(data) => Propagated::MediaData(self.id, data),
-                Event::KeyframeRequest(req) => self.handle_incoming_keyframe_req(req),
                 Event::ChannelOpen(cid, _) => {
                     self.cid = Some(cid);
                     Propagated::Noop
                 }
                 Event::ChannelData(data) => self.handle_channel_data(data),
-
-                // NB: To see statistics, uncomment set_stats_interval() above.
-                Event::MediaIngressStats(data) => {
-                    info!("{:?}", data);
+                e => {
+                    println!("Unhandled event: {:?}", e);
                     Propagated::Noop
                 }
-                Event::MediaEgressStats(data) => {
-                    info!("{:?}", data);
-                    Propagated::Noop
-                }
-                Event::PeerStats(data) => {
-                    info!("{:?}", data);
-                    Propagated::Noop
-                }
-                _ => Propagated::Noop,
             },
         }
     }
 
-    fn handle_media_added(&mut self, mid: Mid, kind: MediaKind) -> Propagated {
-        let track_in = Arc::new(TrackIn {
-            origin: self.id,
-            mid,
-            kind,
-        });
-
-        // The Client instance owns the strong reference to the incoming
-        // track, all other clients have a weak reference.
-        let weak = Arc::downgrade(&track_in);
-        self.tracks_in.push(track_in);
-
-        Propagated::TrackOpen(self.id, weak)
-    }
-
-    fn handle_incoming_keyframe_req(&self, mut req: KeyframeRequest) -> Propagated {
-        // Need to figure out the track_in mid that needs to handle the keyframe request.
-        let Some(track_out) = self.tracks_out.iter().find(|t| t.mid() == Some(req.mid)) else {
-            return Propagated::Noop;
-        };
-        let Some(track_in) = track_out.track_in.upgrade() else {
-            return Propagated::Noop;
-        };
-
-        // This is the rid picked from incoming mediadata, and to which we need to
-        // send the keyframe request.
-        req.rid = self.chosen_rid;
-
-        Propagated::KeyframeRequest(self.id, req, track_in.origin, track_in.mid)
-    }
-
-    fn negotiate_if_needed(&mut self) -> bool {
-        if self.cid.is_none() || self.pending.is_some() {
-            // Don't negotiate if there is no data channel, or if we have pending changes already.
-            return false;
-        }
-
-        let mut change = self.rtc.sdp_api();
-
-        for track in &mut self.tracks_out {
-            if let TrackOutState::ToOpen = track.state {
-                if let Some(track_in) = track.track_in.upgrade() {
-                    let stream_id = track_in.origin.to_string();
-                    let mid =
-                        change.add_media(track_in.kind, Direction::SendOnly, Some(stream_id), None);
-                    track.state = TrackOutState::Negotiating(mid);
-                }
-            }
-        }
-
-        if !change.has_changes() {
-            return false;
-        }
-
-        let Some((offer, pending)) = change.apply() else {
-            return false;
-        };
-
-        let Some(mut channel) = self
-            .cid
-            .and_then(|id| self.rtc.channel(id)) else {
-            return false;
-        };
-
-        let json = serde_json::to_string(&offer).unwrap();
-        channel
-            .write(false, json.as_bytes())
-            .expect("to write answer");
-
-        self.pending = Some(pending);
-
-        true
-    }
-
     fn handle_channel_data(&mut self, d: ChannelData) -> Propagated {
-        if let Ok(offer) = serde_json::from_slice::<'_, SdpOffer>(&d.data) {
-            self.handle_offer(offer);
-        } else if let Ok(answer) = serde_json::from_slice::<'_, SdpAnswer>(&d.data) {
-            self.handle_answer(answer);
-        }
+        dbg!(d);
 
         Propagated::Noop
-    }
-
-    fn handle_offer(&mut self, offer: SdpOffer) {
-        let answer = self
-            .rtc
-            .sdp_api()
-            .accept_offer(offer)
-            .expect("offer to be accepted");
-
-        // Keep local track state in sync, cancelling any pending negotiation
-        // so we can redo it after this offer is handled.
-        for track in &mut self.tracks_out {
-            if let TrackOutState::Negotiating(_) = track.state {
-                track.state = TrackOutState::ToOpen;
-            }
-        }
-
-        let mut channel = self
-            .cid
-            .and_then(|id| self.rtc.channel(id))
-            .expect("channel to be open");
-
-        let json = serde_json::to_string(&answer).unwrap();
-        channel
-            .write(false, json.as_bytes())
-            .expect("to write answer");
-    }
-
-    fn handle_answer(&mut self, answer: SdpAnswer) {
-        if let Some(pending) = self.pending.take() {
-            self.rtc
-                .sdp_api()
-                .accept_answer(pending, answer)
-                .expect("answer to be accepted");
-
-            for track in &mut self.tracks_out {
-                if let TrackOutState::Negotiating(m) = track.state {
-                    track.state = TrackOutState::Open(m);
-                }
-            }
-        }
-    }
-
-    fn handle_track_open(&mut self, track_in: Weak<TrackIn>) {
-        let track_out = TrackOut {
-            track_in,
-            state: TrackOutState::ToOpen,
-        };
-        self.tracks_out.push(track_out);
-    }
-
-    fn handle_media_data(&mut self, origin: ClientId, data: &MediaData) {
-        // Figure out which outgoing track maps to the incoming media data.
-        let Some(mid) = self.tracks_out
-            .iter()
-            .find(|o| o.track_in.upgrade().filter(|i|
-                i.origin == origin &&
-                    i.mid == data.mid).is_some())
-            .and_then(|o| o.mid()) else {
-            return;
-        };
-
-        let Some(mut media) = self.rtc.media(mid) else {
-            return;
-        };
-
-        if data.rid.is_some() && data.rid != Some("h".into()) {
-            // This is where we plug in a selection strategy for simulcast. For
-            // now either let rid=None through (which would be no simulcast layers)
-            // or "h" if we have simulcast (see commented out code in chat.html).
-            return;
-        }
-
-        // Remember this value for keyframe requests.
-        if self.chosen_rid != data.rid {
-            self.chosen_rid = data.rid;
-        }
-
-        // Match outgoing pt to incoming codec.
-        let Some(pt) = media.match_params(data.params) else {
-            return;
-        };
-
-        if let Err(e) = media
-            .writer(pt)
-            .write(data.network_time, data.time, &data.data)
-        {
-            warn!("Client ({}) failed: {:?}", *self.id, e);
-            self.rtc.disconnect();
-        }
-    }
-
-    fn handle_keyframe_request(&mut self, req: KeyframeRequest, mid_in: Mid) {
-        let has_incoming_track = self.tracks_in.iter().any(|i| i.mid == mid_in);
-
-        // This will be the case for all other client but the one where the track originates.
-        if !has_incoming_track {
-            return;
-        }
-
-        let Some(mut media) = self.rtc.media(mid_in) else {
-            return;
-        };
-
-        if let Err(e) = media.request_keyframe(req.rid, req.kind) {
-            // This can fail if the rid doesn't match any media.
-            info!("request_keyframe failed: {:?}", e);
-        }
     }
 }
 
