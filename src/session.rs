@@ -19,16 +19,20 @@ use crate::{RtcConfig, RtcError};
 
 use super::{MediaInner, PolledPacket};
 
-// Minimum time we delay between sending nacks. This should be
-// set high enough to not cause additional problems in very bad
-// network conditions.
+/// Minimum time we delay between sending nacks. This should be
+/// set high enough to not cause additional problems in very bad
+/// network conditions.
 const NACK_MIN_INTERVAL: Duration = Duration::from_millis(100);
 
-// Delay between reports of TWCC. This is deliberately very low.
+/// Delay between reports of TWCC. This is deliberately very low.
 const TWCC_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Amend to the current_bitrate value.
 const PACING_FACTOR: f64 = 1.1;
-const PADDING_FACTOR: f64 = 1.0;
+
+/// Amount of deviation needed to emit a new BWE value. This is to reduce
+/// the total number BWE events to only fire when there is a substantial change.
+const ESTIMATE_TOLERANCE: f64 = 0.05;
 
 pub(crate) struct Session {
     id: SessionId,
@@ -113,6 +117,8 @@ impl Session {
                 bwe: send_side_bwe,
                 desired_bitrate: Bitrate::ZERO,
                 current_bitrate: rate,
+
+                last_emitted_estimate: Bitrate::ZERO,
             };
 
             (pacer, Some(bwe))
@@ -240,12 +246,7 @@ impl Session {
         if let Some(padding_request) = self.pacer.handle_timeout(now, iter) {
             let media = self
                 .media_by_mid_mut(padding_request.mid)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "No media found for mid {}, to service padding request",
-                        padding_request.mid
-                    )
-                });
+                .expect("media for service padding request");
 
             media.generate_padding(now, padding_request.padding);
         }
@@ -894,7 +895,7 @@ impl Session {
 
         let padding_rate = bwe
             .last_estimate()
-            .map(|estimate| (estimate * PADDING_FACTOR).min(bwe.desired_bitrate))
+            .map(|estimate| estimate.min(bwe.desired_bitrate))
             .unwrap_or(Bitrate::ZERO);
 
         self.pacer.set_padding_rate(padding_rate);
@@ -914,6 +915,8 @@ struct Bwe {
     bwe: SendSideBandwithEstimator,
     desired_bitrate: Bitrate,
     current_bitrate: Bitrate,
+
+    last_emitted_estimate: Bitrate,
 }
 
 impl Bwe {
@@ -930,7 +933,18 @@ impl Bwe {
     }
 
     fn poll_estimate(&mut self) -> Option<Bitrate> {
-        self.bwe.poll_estimate()
+        let estimate = self.bwe.last_estimate()?;
+
+        let min = self.last_emitted_estimate * (1.0 - ESTIMATE_TOLERANCE);
+        let max = self.last_emitted_estimate * (1.0 + ESTIMATE_TOLERANCE);
+
+        if estimate < min || estimate > max {
+            self.last_emitted_estimate = estimate;
+            Some(estimate)
+        } else {
+            // Estimate is within tolerances.
+            None
+        }
     }
 
     fn poll_timeout(&self) -> Instant {

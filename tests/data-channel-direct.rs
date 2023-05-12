@@ -2,7 +2,7 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use str0m::channel::ChannelConfig;
-use str0m::{Candidate, RtcConfig, RtcError};
+use str0m::{Candidate, Event, RtcConfig, RtcError};
 use tracing::info_span;
 
 mod common;
@@ -47,6 +47,7 @@ pub fn data_channel_direct() -> Result<(), RtcError> {
 
     let config = ChannelConfig {
         negotiated: Some(1),
+        label: "my-chan".into(),
         ..Default::default()
     };
     let cid = l.direct_api().create_data_channel(config.clone());
@@ -77,6 +78,10 @@ pub fn data_channel_direct() -> Result<(), RtcError> {
     }
 
     assert!(r.events.len() > 120);
+    assert!(l
+        .events
+        .iter()
+        .any(|event| event == &Event::ChannelOpen(cid, "my-chan".into())));
 
     Ok(())
 }
