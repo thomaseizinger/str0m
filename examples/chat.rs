@@ -52,7 +52,8 @@ pub fn main() {
         libp2p_identity::Keypair::ed25519_from_bytes(&mut bytes).expect("a valid keypair");
 
     // Figure out some public IP address, since Firefox will not accept 127.0.0.1 for WebRTC traffic.
-    let host_addr = Ipv4Addr::new(192, 168, 1, 16); // TODO: This needs to be a local address, I had two interfaces hence this is hardcoded.
+    // let host_addr = Ipv4Addr::new(192, 168, 1, 16); // TODO: This needs to be a local address, I had two interfaces hence this is hardcoded.
+    let host_addr = util::select_host_address();
 
     let (tx, rx) = mpsc::sync_channel(1);
 
@@ -182,7 +183,7 @@ fn run(socket: UdpSocket, _rx: Receiver<Rtc>) -> Result<(), RtcError> {
                             ufrag: u.to_owned(),
                             pass: p.to_owned(),
                         });
-                        // rtc.direct_api().start_dtls(true).unwrap();
+                        rtc.direct_api().set_remote_fingerprint("sha-256 FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF".parse().unwrap());
                         let noise_channel_id =
                             rtc.direct_api().create_data_channel(ChannelConfig {
                                 label: "".to_string(),
