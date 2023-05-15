@@ -189,8 +189,8 @@ fn run(socket: UdpSocket, _rx: Receiver<Rtc>) -> Result<(), RtcError> {
                             pass: p.to_owned(),
                         });
                         rtc.direct_api().set_ice_controlling(false);
-                        rtc.direct_api().start_dtls(true).unwrap();
-                        rtc.direct_api().start_sctp(true);
+                        rtc.direct_api().start_dtls(false).unwrap();
+                        rtc.direct_api().start_sctp(false);
 
                         let noise_channel_id =
                             rtc.direct_api().create_data_channel(ChannelConfig {
