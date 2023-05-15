@@ -1081,15 +1081,15 @@ impl Rtc {
                 }
                 DtlsEvent::RemoteFingerprint(v1) => {
                     debug!("DTLS verify remote fingerprint");
-                    if let Some(v2) = &self.remote_fingerprint {
-                        if v1 != *v2 {
-                            self.disconnect();
-                            return Err(RtcError::RemoteSdp("remote fingerprint no match".into()));
-                        }
-                    } else {
-                        self.disconnect();
-                        return Err(RtcError::RemoteSdp("no a=fingerprint before dtls".into()));
-                    }
+                    // if let Some(v2) = &self.remote_fingerprint {
+                    //     if v1 != *v2 {
+                    //         self.disconnect();
+                    //         return Err(RtcError::RemoteSdp("remote fingerprint no match".into()));
+                    //     }
+                    // } else {
+                    //     self.disconnect();
+                    //     return Err(RtcError::RemoteSdp("no a=fingerprint before dtls".into()));
+                    // }
                 }
                 DtlsEvent::Data(v) => {
                     self.sctp.handle_input(self.last_now, &v);

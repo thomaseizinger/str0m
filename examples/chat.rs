@@ -177,13 +177,21 @@ fn run(socket: UdpSocket, _rx: Receiver<Rtc>) -> Result<(), RtcError> {
                         info!("Received STUN from {}:{}", u, p);
 
                         let mut rtc = Rtc::builder().set_ice_lite(true).build();
-                        rtc.add_remote_candidate(Candidate::host(source).unwrap());
                         rtc.add_local_candidate(Candidate::host(destination).unwrap());
+                        rtc.add_remote_candidate(Candidate::host(source).unwrap());
+                        rtc.direct_api().set_remote_fingerprint("sha-256 FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF".parse().unwrap());
                         rtc.direct_api().set_remote_ice_credentials(IceCreds {
                             ufrag: u.to_owned(),
                             pass: p.to_owned(),
                         });
-                        rtc.direct_api().set_remote_fingerprint("sha-256 FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF".parse().unwrap());
+                        rtc.direct_api().set_local_ice_credentials(IceCreds {
+                            ufrag: u.to_owned(),
+                            pass: p.to_owned(),
+                        });
+                        rtc.direct_api().set_ice_controlling(false);
+                        rtc.direct_api().start_dtls(true).unwrap();
+                        rtc.direct_api().start_sctp(true);
+
                         let noise_channel_id =
                             rtc.direct_api().create_data_channel(ChannelConfig {
                                 label: "".to_string(),
@@ -197,7 +205,12 @@ fn run(socket: UdpSocket, _rx: Receiver<Rtc>) -> Result<(), RtcError> {
                     }
                 }
                 other => {
-                    dbg!(other);
+                    for mut c in clients.iter_mut() {
+                        if c.accepts(&other) {
+                            c.handle_input(other);
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -226,7 +239,7 @@ fn propagate(clients: &mut [Client], to_propagate: Vec<Propagated>) {
 
             match &p {
                 Propagated::Noop | Propagated::Timeout(_) => {}
-                p => panic!("Unexpected `Propagated`: {p:?}"),
+                p => panic!("Unexpected `Propagated`"),
             }
         }
     }

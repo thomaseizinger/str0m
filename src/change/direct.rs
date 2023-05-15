@@ -48,6 +48,11 @@ impl<'a> DirectApi<'a> {
         self.rtc.ice.set_remote_credentials(remote_ice_credentials);
     }
 
+    /// Sets the local ICE credentials.
+    pub fn set_local_ice_credentials(&mut self, local_ice_credentials: IceCreds) {
+        self.rtc.ice.set_local_credentials(local_ice_credentials);
+    }
+
     /// Returns a reference to the local DTLS fingerprint used by this peer connection.
     ///
     /// The DTLS fingerprint is a hash of the local SSL/TLS certificate used to authenticate the
