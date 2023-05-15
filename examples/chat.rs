@@ -140,11 +140,11 @@ fn run(socket: UdpSocket, _rx: Receiver<Rtc>) -> Result<(), RtcError> {
         let timeouts: Vec<_> = to_propagate.iter().filter_map(|p| p.as_timeout()).collect();
 
         // We keep propagating client events until all clients respond with a timeout.
-        // if to_propagate.len() > timeouts.len() {
-        //     propagate(&mut clients, to_propagate);
-        //     // Start over to propagate more client data until all are timeouts.
-        //     continue;
-        // }
+        if to_propagate.len() > timeouts.len() {
+            propagate(&mut clients, to_propagate);
+            // Start over to propagate more client data until all are timeouts.
+            continue;
+        }
 
         // Timeout in case we have no clients. We can't wait forever since we need to keep
         // polling the spawn_new_clients to discover a client.
@@ -210,19 +210,26 @@ fn run(socket: UdpSocket, _rx: Receiver<Rtc>) -> Result<(), RtcError> {
     }
 }
 
-#[test]
-fn sdp_parse_test() {
-    let sdp = r#"v=0
-o=- 123456789 0 IN IP4 192.0.2.1
-s=Example SDP Offer
-t=0 0
-a=ice-lite
-a=rtcp-mux
-m=audio 50000 RTP/AVP 0
-a=rtpmap:0 PCMU/8000
-"#;
+fn propagate(clients: &mut [Client], to_propagate: Vec<Propagated>) {
+    for p in to_propagate {
+        let Some(client_id) = p.client_id() else {
+            // If the event doesn't have a client id, it can't be propagated,
+            // (it's either a noop or a timeout).
+            continue;
+        };
 
-    let offer = SdpOffer::from_sdp_string(sdp).unwrap();
+        for client in &mut *clients {
+            if client.id == client_id {
+                // Do not propagate to originating client.
+                continue;
+            }
+
+            match &p {
+                Propagated::Noop | Propagated::Timeout(_) => {}
+                p => panic!("Unexpected `Propagated`: {p:?}"),
+            }
+        }
+    }
 }
 
 fn read_socket_input<'a>(socket: &UdpSocket, buf: &'a mut Vec<u8>) -> Option<Input<'a>> {
