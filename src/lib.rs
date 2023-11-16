@@ -596,7 +596,7 @@ use dtls::DtlsCert;
 use dtls::Fingerprint;
 use dtls::{Dtls, DtlsEvent};
 
-mod ice;
+pub mod ice;
 use ice::IceAgent;
 use ice::IceAgentEvent;
 use ice::IceCreds;
