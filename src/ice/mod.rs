@@ -4,7 +4,7 @@
 use thiserror::Error;
 
 mod agent;
-pub(crate) use agent::{IceAgent, IceAgentEvent};
+pub use agent::{IceAgent, IceAgentEvent};
 pub use agent::{IceConnectionState, IceCreds};
 
 mod candidate;
