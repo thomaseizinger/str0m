@@ -605,6 +605,8 @@ pub use ice::{Candidate, CandidateKind};
 mod io;
 use io::DatagramRecv;
 
+pub use io::{StunError, StunMessage};
+
 mod packet;
 
 #[path = "rtp/mod.rs"]
