@@ -390,7 +390,7 @@ impl Candidate {
         self.raddr
     }
 
-    pub(crate) fn kind(&self) -> CandidateKind {
+    pub fn kind(&self) -> CandidateKind {
         self.kind
     }
 
