@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::bwe::BweKind;
-use crate::dtls::{KeyingMaterial, SrtpProfile};
+use crate::dtls::SrtpProfile;
 use crate::format::CodecConfig;
 use crate::format::PayloadParams;
 use crate::io::{DatagramSend, DATAGRAM_MTU, DATAGRAM_MTU_WARN};
@@ -12,14 +12,14 @@ use crate::media::{MediaAdded, MediaChanged};
 use crate::net;
 use crate::packet::SendSideBandwithEstimator;
 use crate::packet::{LeakyBucketPacer, NullPacer, Pacer, PacerImpl};
-use crate::rtp::RawPacket;
+use crate::rtp::{RawPacket, Ssrc};
 use crate::rtp_::Direction;
 use crate::rtp_::Pt;
 use crate::rtp_::SeqNo;
-use crate::rtp_::SRTCP_OVERHEAD;
+// use crate::rtp_::SRTCP_OVERHEAD;
 use crate::rtp_::{extend_u16, RtpHeader, SessionId, TwccRecvRegister, TwccSendRegister};
 use crate::rtp_::{Bitrate, ExtensionMap, Mid, Rtcp, RtcpFb};
-use crate::rtp_::{SrtpContext, Ssrc};
+// use crate::rtp_::{SrtpContext, Ssrc};
 use crate::stats::StatsSnapshot;
 use crate::streams::{RtpPacket, Streams};
 use crate::util::{already_happened, not_happening, Soonest};
@@ -67,8 +67,8 @@ pub(crate) struct Session {
     // Configuration of how we are sending/receiving media.
     pub codec_config: CodecConfig,
 
-    srtp_rx: Option<SrtpContext>,
-    srtp_tx: Option<SrtpContext>,
+    // srtp_rx: Option<SrtpContext>,
+    // srtp_tx: Option<SrtpContext>,
     last_nack: Instant,
     last_twcc: Instant,
     twcc: u64,
@@ -139,8 +139,8 @@ impl Session {
             // These can then be changed in the SDP OFFER/ANSWER dance.
             codec_config: config.codec_config.clone(),
 
-            srtp_rx: None,
-            srtp_tx: None,
+            // srtp_rx: None,
+            // srtp_tx: None,
             last_nack: already_happened(),
             last_twcc: already_happened(),
             twcc: 0,
@@ -185,20 +185,20 @@ impl Session {
         &self.app
     }
 
-    pub fn set_keying_material(
-        &mut self,
-        mat: KeyingMaterial,
-        srtp_profile: SrtpProfile,
-        active: bool,
-    ) {
-        // TODO: rename this to `initialise_srtp_context`?
-        // Whether we're active or passive determines if we use the left or right
-        // hand side of the key material to derive input/output.
-        let left = active;
-
-        self.srtp_rx = Some(SrtpContext::new(srtp_profile, &mat, !left));
-        self.srtp_tx = Some(SrtpContext::new(srtp_profile, &mat, left));
-    }
+    // pub fn set_keying_material(
+    //     &mut self,
+    //     mat: KeyingMaterial,
+    //     srtp_profile: SrtpProfile,
+    //     active: bool,
+    // ) {
+    //     // TODO: rename this to `initialise_srtp_context`?
+    //     // Whether we're active or passive determines if we use the left or right
+    //     // hand side of the key material to derive input/output.
+    //     let left = active;
+    //
+    //     self.srtp_rx = Some(SrtpContext::new(srtp_profile, &mat, !left));
+    //     self.srtp_tx = Some(SrtpContext::new(srtp_profile, &mat, left));
+    // }
 
     pub fn handle_timeout(&mut self, now: Instant) -> Result<(), RtcError> {
         // Payload any waiting samples
@@ -225,7 +225,7 @@ impl Session {
 
         if let Some(twcc_at) = self.twcc_at() {
             if now >= twcc_at {
-                self.create_twcc_feedback(sender_ssrc, now);
+                // self.create_twcc_feedback(sender_ssrc, now);
             }
         }
 
@@ -251,19 +251,19 @@ impl Session {
         stream.generate_padding(padding_request.padding);
     }
 
-    fn create_twcc_feedback(&mut self, sender_ssrc: Ssrc, now: Instant) -> Option<()> {
-        self.last_twcc = now;
-        let mut twcc = self.twcc_rx_register.build_report(DATAGRAM_MTU - 100)?;
-
-        // These SSRC are on medial level, but twcc is on session level,
-        // we fill in the first discovered media SSRC in each direction.
-        twcc.sender_ssrc = sender_ssrc;
-        twcc.ssrc = self.streams.first_ssrc_remote();
-
-        debug!("Created feedback TWCC: {:?}", twcc);
-        self.feedback_tx.push_front(Rtcp::Twcc(twcc));
-        Some(())
-    }
+    // fn create_twcc_feedback(&mut self, sender_ssrc: Ssrc, now: Instant) -> Option<()> {
+    //     self.last_twcc = now;
+    //     let mut twcc = self.twcc_rx_register.build_report(DATAGRAM_MTU - 100)?;
+    //
+    //     // These SSRC are on medial level, but twcc is on session level,
+    //     // we fill in the first discovered media SSRC in each direction.
+    //     twcc.sender_ssrc = sender_ssrc;
+    //     twcc.ssrc = self.streams.first_ssrc_remote();
+    //
+    //     debug!("Created feedback TWCC: {:?}", twcc);
+    //     self.feedback_tx.push_front(Rtcp::Twcc(twcc));
+    //     Some(())
+    // }
 
     pub fn handle_receive(&mut self, now: Instant, r: net::Receive) {
         self.do_handle_receive(now, r);
@@ -274,7 +274,7 @@ impl Session {
         match r.contents {
             Rtp(buf) => {
                 if let Some(header) = RtpHeader::parse(buf, &self.exts) {
-                    self.handle_rtp(now, header, buf);
+                    // self.handle_rtp(now, header, buf);
                 } else {
                     trace!("Failed to parse RTP header");
                 }
@@ -283,7 +283,7 @@ impl Session {
                 // According to spec, the outer enclosing SRTCP packet should always be a SR or RR,
                 // even if it's irrelevant and empty.
                 // In practice I'm not sure that is happening, because libWebRTC hates empty packets.
-                self.handle_rtcp(now, buf)?;
+                // self.handle_rtcp(now, buf)?;
             }
             _ => {}
         }
@@ -351,171 +351,171 @@ impl Session {
         }
     }
 
-    fn handle_rtp(&mut self, now: Instant, mut header: RtpHeader, buf: &[u8]) {
-        // Rewrite absolute-send-time (if present) to be relative to now.
-        header.ext_vals.update_absolute_send_time(now);
+    // fn handle_rtp(&mut self, now: Instant, mut header: RtpHeader, buf: &[u8]) {
+    //     // Rewrite absolute-send-time (if present) to be relative to now.
+    //     header.ext_vals.update_absolute_send_time(now);
+    //
+    //     trace!("Handle RTP: {:?}", header);
+    //     if let Some(transport_cc) = header.ext_vals.transport_cc {
+    //         let prev = self.twcc_rx_register.max_seq();
+    //         let extended = extend_u16(Some(*prev), transport_cc);
+    //         self.twcc_rx_register.update_seq(extended.into(), now);
+    //     }
+    //
+    //     // The ssrc is the _main_ ssrc (no the rtx, that might be in the header).
+    //     let Some((mid, ssrc)) = self.mid_and_ssrc_for_header(&header) else {
+    //         debug!("No mid/SSRC for header: {:?}", header);
+    //         return;
+    //     };
+    //
+    //     let srtp = match self.srtp_rx.as_mut() {
+    //         Some(v) => v,
+    //         None => {
+    //             trace!("Rejecting SRTP while missing SrtpContext");
+    //             return;
+    //         }
+    //     };
+    //
+    //     // Both of these unwraps are fine because mid_and_ssrc_for_header guarantees it.
+    //     let media = self.medias.iter_mut().find(|m| m.mid() == mid).unwrap();
+    //     let stream = self.streams.stream_rx(&ssrc).unwrap();
+    //
+    //     let params = match main_payload_params(&self.codec_config, header.payload_type) {
+    //         Some(p) => p,
+    //         None => {
+    //             trace!(
+    //                 "No payload params could be found (main or RTX) for {:?}",
+    //                 header.payload_type
+    //             );
+    //             return;
+    //         }
+    //     };
+    //     let clock_rate = params.spec().clock_rate;
+    //     let pt = params.pt();
+    //     let is_repair = pt != header.payload_type;
+    //
+    //     // is_repair controls whether update is updating the main register or the RTX register.
+    //     // Either way we get a seq_no_outer which is used to decrypt the SRTP.
+    //     let receipt_outer = stream.update(now, &header, clock_rate, is_repair);
+    //
+    //     let mut data = match srtp.unprotect_rtp(buf, &header, *receipt_outer.seq_no) {
+    //         Some(v) => v,
+    //         None => {
+    //             trace!("Failed to unprotect SRTP");
+    //             return;
+    //         }
+    //     };
+    //
+    //     if header.has_padding && !RtpHeader::unpad_payload(&mut data) {
+    //         // Unpadding failed. Broken data?
+    //         trace!("unpadding of unprotected payload failed");
+    //         return;
+    //     }
+    //
+    //     if let Some(raw_packets) = &mut self.raw_packets {
+    //         raw_packets.push_back(Box::new(RawPacket::RtpRx(header.clone(), data.clone())));
+    //     }
+    //
+    //     // RTX packets must be rewritten to be a normal packet. This only changes the
+    //     // the seq_no, however MediaTime might be different when interpreted against the
+    //     // the "main" register.
+    //     let receipt = if is_repair {
+    //         // Drop RTX packets that are just empty padding. The payload here
+    //         // is empty because we would have done RtpHeader::unpad_payload above.
+    //         // For unpausing, it's enough with the stream.update() already done above.
+    //         if data.is_empty() {
+    //             return;
+    //         }
+    //
+    //         // Rewrite the header, and removes the resent seq_no from the body.
+    //         stream.un_rtx(&mut header, &mut data, pt);
+    //
+    //         // Now update the "main" register with the repaired packet info.
+    //         // This gives us the extended sequence number of the main stream.
+    //         stream.update(now, &header, clock_rate, false)
+    //     } else {
+    //         // This is not RTX, the outer seq and time is what we use. The first
+    //         // stream.update will have updated the main register.
+    //         receipt_outer
+    //     };
+    //
+    //     let Some(packet) = stream.handle_rtp(now, header, data, receipt.seq_no, receipt.time)
+    //     else {
+    //         return;
+    //     };
+    //
+    //     if self.rtp_mode {
+    //         // In RTP mode, we store the packet temporarily here for the next poll_output().
+    //         // However only if this is a packet not seen before. This filters out spurious resends for padding.
+    //         if receipt.is_new_packet {
+    //             self.pending_packet = Some(packet);
+    //         }
+    //     } else {
+    //         // In non-RTP mode, we let the Media use a Depayloader.
+    //         media.depayload(
+    //             stream.rid(),
+    //             packet,
+    //             self.reordering_size_audio,
+    //             self.reordering_size_video,
+    //             &self.codec_config,
+    //         );
+    //     }
+    // }
 
-        trace!("Handle RTP: {:?}", header);
-        if let Some(transport_cc) = header.ext_vals.transport_cc {
-            let prev = self.twcc_rx_register.max_seq();
-            let extended = extend_u16(Some(*prev), transport_cc);
-            self.twcc_rx_register.update_seq(extended.into(), now);
-        }
-
-        // The ssrc is the _main_ ssrc (no the rtx, that might be in the header).
-        let Some((mid, ssrc)) = self.mid_and_ssrc_for_header(&header) else {
-            debug!("No mid/SSRC for header: {:?}", header);
-            return;
-        };
-
-        let srtp = match self.srtp_rx.as_mut() {
-            Some(v) => v,
-            None => {
-                trace!("Rejecting SRTP while missing SrtpContext");
-                return;
-            }
-        };
-
-        // Both of these unwraps are fine because mid_and_ssrc_for_header guarantees it.
-        let media = self.medias.iter_mut().find(|m| m.mid() == mid).unwrap();
-        let stream = self.streams.stream_rx(&ssrc).unwrap();
-
-        let params = match main_payload_params(&self.codec_config, header.payload_type) {
-            Some(p) => p,
-            None => {
-                trace!(
-                    "No payload params could be found (main or RTX) for {:?}",
-                    header.payload_type
-                );
-                return;
-            }
-        };
-        let clock_rate = params.spec().clock_rate;
-        let pt = params.pt();
-        let is_repair = pt != header.payload_type;
-
-        // is_repair controls whether update is updating the main register or the RTX register.
-        // Either way we get a seq_no_outer which is used to decrypt the SRTP.
-        let receipt_outer = stream.update(now, &header, clock_rate, is_repair);
-
-        let mut data = match srtp.unprotect_rtp(buf, &header, *receipt_outer.seq_no) {
-            Some(v) => v,
-            None => {
-                trace!("Failed to unprotect SRTP");
-                return;
-            }
-        };
-
-        if header.has_padding && !RtpHeader::unpad_payload(&mut data) {
-            // Unpadding failed. Broken data?
-            trace!("unpadding of unprotected payload failed");
-            return;
-        }
-
-        if let Some(raw_packets) = &mut self.raw_packets {
-            raw_packets.push_back(Box::new(RawPacket::RtpRx(header.clone(), data.clone())));
-        }
-
-        // RTX packets must be rewritten to be a normal packet. This only changes the
-        // the seq_no, however MediaTime might be different when interpreted against the
-        // the "main" register.
-        let receipt = if is_repair {
-            // Drop RTX packets that are just empty padding. The payload here
-            // is empty because we would have done RtpHeader::unpad_payload above.
-            // For unpausing, it's enough with the stream.update() already done above.
-            if data.is_empty() {
-                return;
-            }
-
-            // Rewrite the header, and removes the resent seq_no from the body.
-            stream.un_rtx(&mut header, &mut data, pt);
-
-            // Now update the "main" register with the repaired packet info.
-            // This gives us the extended sequence number of the main stream.
-            stream.update(now, &header, clock_rate, false)
-        } else {
-            // This is not RTX, the outer seq and time is what we use. The first
-            // stream.update will have updated the main register.
-            receipt_outer
-        };
-
-        let Some(packet) = stream.handle_rtp(now, header, data, receipt.seq_no, receipt.time)
-        else {
-            return;
-        };
-
-        if self.rtp_mode {
-            // In RTP mode, we store the packet temporarily here for the next poll_output().
-            // However only if this is a packet not seen before. This filters out spurious resends for padding.
-            if receipt.is_new_packet {
-                self.pending_packet = Some(packet);
-            }
-        } else {
-            // In non-RTP mode, we let the Media use a Depayloader.
-            media.depayload(
-                stream.rid(),
-                packet,
-                self.reordering_size_audio,
-                self.reordering_size_video,
-                &self.codec_config,
-            );
-        }
-    }
-
-    fn handle_rtcp(&mut self, now: Instant, buf: &[u8]) -> Option<()> {
-        let srtp: &mut SrtpContext = self.srtp_rx.as_mut()?;
-        let unprotected = srtp.unprotect_rtcp(buf)?;
-
-        Rtcp::read_packet(&unprotected, &mut self.feedback_rx);
-        let mut need_configure_pacer = false;
-
-        if let Some(raw_packets) = &mut self.raw_packets {
-            for fb in &self.feedback_rx {
-                raw_packets.push_back(Box::new(RawPacket::RtcpRx(fb.clone())));
-            }
-        }
-
-        for fb in RtcpFb::from_rtcp(self.feedback_rx.drain(..)) {
-            if let RtcpFb::Twcc(twcc) = fb {
-                debug!("Handle TWCC: {:?}", twcc);
-                let range = self.twcc_tx_register.apply_report(twcc, now);
-
-                if let Some(bwe) = &mut self.bwe {
-                    let records = range.and_then(|range| self.twcc_tx_register.send_records(range));
-
-                    if let Some(records) = records {
-                        bwe.update(records, now);
-                    }
-                }
-                need_configure_pacer = true;
-
-                // The funky thing about TWCC reports is that they are never stapled
-                // together with other RTCP packet. If they were though, we want to
-                // handle more packets.
-                continue;
-            }
-
-            if fb.is_for_rx() {
-                let Some(stream) = self.streams.stream_rx(&fb.ssrc()) else {
-                    continue;
-                };
-                stream.handle_rtcp(now, fb);
-            } else {
-                let Some(stream) = self.streams.stream_tx(&fb.ssrc()) else {
-                    continue;
-                };
-                stream.handle_rtcp(now, fb);
-            }
-        }
-
-        // Not in the above if due to lifetime issues, still okay because the method
-        // doesn't do anything when BWE isn't configured.
-        if need_configure_pacer {
-            self.configure_pacer();
-        }
-
-        Some(())
-    }
+    // fn handle_rtcp(&mut self, now: Instant, buf: &[u8]) -> Option<()> {
+    //     let srtp: &mut SrtpContext = self.srtp_rx.as_mut()?;
+    //     let unprotected = srtp.unprotect_rtcp(buf)?;
+    //
+    //     Rtcp::read_packet(&unprotected, &mut self.feedback_rx);
+    //     let mut need_configure_pacer = false;
+    //
+    //     if let Some(raw_packets) = &mut self.raw_packets {
+    //         for fb in &self.feedback_rx {
+    //             raw_packets.push_back(Box::new(RawPacket::RtcpRx(fb.clone())));
+    //         }
+    //     }
+    //
+    //     for fb in RtcpFb::from_rtcp(self.feedback_rx.drain(..)) {
+    //         if let RtcpFb::Twcc(twcc) = fb {
+    //             debug!("Handle TWCC: {:?}", twcc);
+    //             let range = self.twcc_tx_register.apply_report(twcc, now);
+    //
+    //             if let Some(bwe) = &mut self.bwe {
+    //                 let records = range.and_then(|range| self.twcc_tx_register.send_records(range));
+    //
+    //                 if let Some(records) = records {
+    //                     bwe.update(records, now);
+    //                 }
+    //             }
+    //             need_configure_pacer = true;
+    //
+    //             // The funky thing about TWCC reports is that they are never stapled
+    //             // together with other RTCP packet. If they were though, we want to
+    //             // handle more packets.
+    //             continue;
+    //         }
+    //
+    //         if fb.is_for_rx() {
+    //             let Some(stream) = self.streams.stream_rx(&fb.ssrc()) else {
+    //                 continue;
+    //             };
+    //             stream.handle_rtcp(now, fb);
+    //         } else {
+    //             let Some(stream) = self.streams.stream_tx(&fb.ssrc()) else {
+    //                 continue;
+    //             };
+    //             stream.handle_rtcp(now, fb);
+    //         }
+    //     }
+    //
+    //     // Not in the above if due to lifetime issues, still okay because the method
+    //     // doesn't do anything when BWE isn't configured.
+    //     if need_configure_pacer {
+    //         self.configure_pacer();
+    //     }
+    //
+    //     Some(())
+    // }
 
     pub fn poll_event(&mut self) -> Option<Event> {
         if let Some(bitrate_estimate) = self.bwe.as_mut().and_then(|bwe| bwe.poll_estimate()) {
@@ -585,122 +585,124 @@ impl Session {
     }
 
     fn ready_for_srtp(&self) -> bool {
-        self.srtp_rx.is_some() && self.srtp_tx.is_some()
+        // self.srtp_rx.is_some() && self.srtp_tx.is_some()
+        false
     }
 
     pub fn poll_datagram(&mut self, now: Instant) -> Option<net::DatagramSend> {
-        // Time must have progressed forward from start value.
-        if now == already_happened() {
-            return None;
-        }
+        // // Time must have progressed forward from start value.
+        // if now == already_happened() {
+        //     return None;
+        // }
+        //
+        // let x = None
+        // .or_else(|| self.poll_feedback())
+        // .or_else(|| self.poll_packet(now));
+        //
+        // if let Some(x) = &x {
+        //     // In RTP mode we trust the API user feeds the RTP packet sizes they
+        //     // need for the MTU they are targeting. This warning is only for when
+        //     // str0m does the RTP packetization.
+        //     if !self.rtp_mode && x.len() > DATAGRAM_MTU_WARN {
+        //         warn!("RTP above MTU {}: {}", DATAGRAM_MTU_WARN, x.len());
+        //     }
+        // }
 
-        let x = None
-            .or_else(|| self.poll_feedback())
-            .or_else(|| self.poll_packet(now));
-
-        if let Some(x) = &x {
-            // In RTP mode we trust the API user feeds the RTP packet sizes they
-            // need for the MTU they are targeting. This warning is only for when
-            // str0m does the RTP packetization.
-            if !self.rtp_mode && x.len() > DATAGRAM_MTU_WARN {
-                warn!("RTP above MTU {}: {}", DATAGRAM_MTU_WARN, x.len());
-            }
-        }
-
-        x
+        None
     }
 
-    fn poll_feedback(&mut self) -> Option<net::DatagramSend> {
-        if self.feedback_tx.is_empty() {
-            return None;
-        }
+    // fn poll_feedback(&mut self) -> Option<net::DatagramSend> {
+    //     if self.feedback_tx.is_empty() {
+    //         return None;
+    //     }
+    //
+    //     // Round to nearest multiple of 4 bytes.
+    //     // const ENCRYPTABLE_MTU: usize = (DATAGRAM_MTU - SRTCP_OVERHEAD) & !3;
+    //     const ENCRYPTABLE_MTU: usize = (DATAGRAM_MTU - 0) & !3;
+    //     assert!(ENCRYPTABLE_MTU % 4 == 0);
+    //
+    //     let mut data = vec![0_u8; ENCRYPTABLE_MTU];
+    //
+    //     let mut raw_packets = self.raw_packets.as_mut();
+    //     let output = move |fb| {
+    //         if let Some(raw_packets) = &mut raw_packets {
+    //             raw_packets.push_back(Box::new(RawPacket::RtcpTx(fb)));
+    //         }
+    //     };
+    //
+    //     let len = Rtcp::write_packet(&mut self.feedback_tx, &mut data, output);
+    //
+    //     if len == 0 {
+    //         return None;
+    //     }
+    //
+    //     data.truncate(len);
+    //
+    //     let srtp = self.srtp_tx.as_mut()?;
+    //     let protected = srtp.protect_rtcp(&data);
+    //
+    //     assert!(
+    //         protected.len() < DATAGRAM_MTU,
+    //         "Encrypted SRTCP should be less than MTU"
+    //     );
+    //
+    //     Some(protected.into())
+    // }
 
-        // Round to nearest multiple of 4 bytes.
-        const ENCRYPTABLE_MTU: usize = (DATAGRAM_MTU - SRTCP_OVERHEAD) & !3;
-        assert!(ENCRYPTABLE_MTU % 4 == 0);
-
-        let mut data = vec![0_u8; ENCRYPTABLE_MTU];
-
-        let mut raw_packets = self.raw_packets.as_mut();
-        let output = move |fb| {
-            if let Some(raw_packets) = &mut raw_packets {
-                raw_packets.push_back(Box::new(RawPacket::RtcpTx(fb)));
-            }
-        };
-
-        let len = Rtcp::write_packet(&mut self.feedback_tx, &mut data, output);
-
-        if len == 0 {
-            return None;
-        }
-
-        data.truncate(len);
-
-        let srtp = self.srtp_tx.as_mut()?;
-        let protected = srtp.protect_rtcp(&data);
-
-        assert!(
-            protected.len() < DATAGRAM_MTU,
-            "Encrypted SRTCP should be less than MTU"
-        );
-
-        Some(protected.into())
-    }
-
-    fn poll_packet(&mut self, now: Instant) -> Option<DatagramSend> {
-        let srtp_tx = self.srtp_tx.as_mut()?;
-
-        // Figure out which, if any, queue to poll
-        let mid = self.pacer.poll_queue()?;
-        let media = self
-            .medias
-            .iter()
-            .find(|m| m.mid() == mid)
-            .expect("index is media");
-
-        let buf = &mut self.poll_packet_buf;
-        let twcc_seq = self.twcc;
-
-        // TODO: allow for sending simulcast
-        let stream = self.streams.stream_tx_by_mid_rid(media.mid(), None)?;
-
-        let params = &self.codec_config;
-        let exts = media.remote_extmap();
-        let receipt = stream.poll_packet(now, exts, &mut self.twcc, params, buf)?;
-
-        let PacketReceipt {
-            header,
-            seq_no,
-            is_padding,
-            payload_size,
-        } = receipt;
-
-        trace!(payload_size, is_padding, "Poll RTP: {:?}", header);
-
-        #[cfg(feature = "_internal_dont_use_log_stats")]
-        {
-            let kind = if is_padding { "padding" } else { "media" };
-
-            crate::log_stat!("PACKET_SENT", header.ssrc, payload_size, kind);
-        }
-
-        self.pacer.register_send(now, payload_size.into(), mid);
-
-        if let Some(raw_packets) = &mut self.raw_packets {
-            raw_packets.push_back(Box::new(RawPacket::RtpTx(header.clone(), buf.clone())));
-        }
-
-        let protected = srtp_tx.protect_rtp(buf, &header, *seq_no);
-
-        self.twcc_tx_register
-            .register_seq(twcc_seq.into(), now, payload_size);
-
-        // Technically we should wait for the next handle_timeout, but this speeds things up a bit
-        // avoiding an extra poll_timeout.
-        self.update_queue_state(now);
-
-        Some(protected.into())
-    }
+    // fn poll_packet(&mut self, now: Instant) -> Option<DatagramSend> {
+    //     let srtp_tx = self.srtp_tx.as_mut()?;
+    //
+    //     // Figure out which, if any, queue to poll
+    //     let mid = self.pacer.poll_queue()?;
+    //     let media = self
+    //         .medias
+    //         .iter()
+    //         .find(|m| m.mid() == mid)
+    //         .expect("index is media");
+    //
+    //     let buf = &mut self.poll_packet_buf;
+    //     let twcc_seq = self.twcc;
+    //
+    //     // TODO: allow for sending simulcast
+    //     let stream = self.streams.stream_tx_by_mid_rid(media.mid(), None)?;
+    //
+    //     let params = &self.codec_config;
+    //     let exts = media.remote_extmap();
+    //     let receipt = stream.poll_packet(now, exts, &mut self.twcc, params, buf)?;
+    //
+    //     let PacketReceipt {
+    //         header,
+    //         seq_no,
+    //         is_padding,
+    //         payload_size,
+    //     } = receipt;
+    //
+    //     trace!(payload_size, is_padding, "Poll RTP: {:?}", header);
+    //
+    //     #[cfg(feature = "_internal_dont_use_log_stats")]
+    //     {
+    //         let kind = if is_padding { "padding" } else { "media" };
+    //
+    //         crate::log_stat!("PACKET_SENT", header.ssrc, payload_size, kind);
+    //     }
+    //
+    //     self.pacer.register_send(now, payload_size.into(), mid);
+    //
+    //     if let Some(raw_packets) = &mut self.raw_packets {
+    //         raw_packets.push_back(Box::new(RawPacket::RtpTx(header.clone(), buf.clone())));
+    //     }
+    //
+    //     let protected = srtp_tx.protect_rtp(buf, &header, *seq_no);
+    //
+    //     self.twcc_tx_register
+    //         .register_seq(twcc_seq.into(), now, payload_size);
+    //
+    //     // Technically we should wait for the next handle_timeout, but this speeds things up a bit
+    //     // avoiding an extra poll_timeout.
+    //     self.update_queue_state(now);
+    //
+    //     Some(protected.into())
+    // }
 
     pub fn poll_timeout(&mut self) -> Option<Instant> {
         let regular_at = Some(self.regular_feedback_at());

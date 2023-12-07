@@ -8,8 +8,8 @@ use crate::format::CodecConfig;
 use crate::io::{Id, DATAGRAM_MTU};
 use crate::packet::{DepacketizingBuffer, Payloader, RtpMeta};
 use crate::rtp_::ExtensionMap;
-use crate::rtp_::SRTP_BLOCK_SIZE;
-use crate::rtp_::SRTP_OVERHEAD;
+// use crate::rtp_::SRTP_BLOCK_SIZE;
+// use crate::rtp_::SRTP_OVERHEAD;
 use crate::RtcError;
 
 use crate::format::PayloadParams;
@@ -389,9 +389,11 @@ impl Media {
 
         let payloader = self.payloader_for(pt, *rid, params);
 
-        const RTP_SIZE: usize = DATAGRAM_MTU - SRTP_OVERHEAD;
+        // const RTP_SIZE: usize = DATAGRAM_MTU - SRTP_OVERHEAD;
+        const RTP_SIZE: usize = DATAGRAM_MTU - 0;
         // align to SRTP block size to minimize padding needs
-        const MTU: usize = RTP_SIZE - RTP_SIZE % SRTP_BLOCK_SIZE;
+        // const MTU: usize = RTP_SIZE - RTP_SIZE % SRTP_BLOCK_SIZE;
+        const MTU: usize = RTP_SIZE - RTP_SIZE % 1;
 
         payloader
             .push_sample(now, to_payload, MTU, is_audio, stream)

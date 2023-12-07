@@ -1,5 +1,3 @@
-use openssl::error::ErrorStack;
-use openssl::ssl::SslContext;
 use std::collections::VecDeque;
 use std::fmt;
 use std::io::{self, ErrorKind, Read, Write};
@@ -8,18 +6,12 @@ use thiserror::Error;
 
 use crate::io::{DatagramRecv, DatagramSend, Receive, DATAGRAM_MTU_WARN};
 
-mod ossl;
-use ossl::{dtls_create_ctx, dtls_ssl_create, TlsStream};
-
-pub use ossl::DtlsCert;
-pub(crate) use ossl::KeyingMaterial;
-
 /// Errors that can arise in DTLS.
 #[derive(Debug, Error)]
 pub enum DtlsError {
     /// Some error from OpenSSL layer (used for DTLS).
-    #[error("{0}")]
-    OpenSsl(#[from] ErrorStack),
+    // #[error("{0}")]
+    // OpenSsl(#[from] ErrorStack),
 
     /// Other IO errors.
     #[error("{0}")]
@@ -131,7 +123,7 @@ impl fmt::Display for SrtpProfile {
 /// Encapsulation of DTLS.
 pub struct Dtls {
     /// Certificate for the DTLS session.
-    _cert: DtlsCert,
+    // _cert: DtlsCert,
 
     /// The fingerprint of the certificate.
     fingerprint: Fingerprint,
@@ -146,10 +138,10 @@ pub struct Dtls {
     ///
     /// This just needs to be kept alive since it pins the entire openssl context
     /// from which `Ssl` is created.
-    _context: SslContext,
+    // _context: SslContext,
 
     /// The actual openssl TLS stream.
-    tls: TlsStream<IoBuffer>,
+    // tls: TlsStream<IoBuffer>,
 
     /// Outgoing events, ready to be polled.
     events: VecDeque<DtlsEvent>,
@@ -161,7 +153,7 @@ pub enum DtlsEvent {
     Connected,
 
     /// Keying material for SRTP encryption master key and the selected SRTP profile.
-    SrtpKeyingMaterial(KeyingMaterial, SrtpProfile),
+    // SrtpKeyingMaterial(KeyingMaterial, SrtpProfile),
 
     /// The fingerprint of the remote peer.
     ///
@@ -177,26 +169,27 @@ impl Dtls {
     ///
     /// `active` indicates whether this side should initiate the handshake or not.
     /// This in turn is governed by the `a=setup` SDP attribute.
-    pub fn new(cert: DtlsCert, fingerprint_verification: bool) -> Result<Self, DtlsError> {
-        let fingerprint = cert.fingerprint();
-        let context = dtls_create_ctx(&cert)?;
-        let ssl = dtls_ssl_create(&context)?;
-        Ok(Dtls {
-            _cert: cert,
-            fingerprint,
-            fingerprint_verification,
-            remote_fingerprint: None,
-            _context: context,
-            tls: TlsStream::new(ssl, IoBuffer::default()),
-            events: VecDeque::new(),
-        })
-    }
+    // pub fn new(cert: DtlsCert, fingerprint_verification: bool) -> Result<Self, DtlsError> {
+    //     let fingerprint = cert.fingerprint();
+    //     let context = dtls_create_ctx(&cert)?;
+    //     let ssl = dtls_ssl_create(&context)?;
+    //     Ok(Dtls {
+    //         _cert: cert,
+    //         fingerprint,
+    //         fingerprint_verification,
+    //         remote_fingerprint: None,
+    //         _context: context,
+    //         tls: TlsStream::new(ssl, IoBuffer::default()),
+    //         events: VecDeque::new(),
+    //     })
+    // }
 
     /// Tells if this instance has been inited.
     ///
     /// Once true, we cannot do `set_active` anymore.
     pub fn is_inited(&self) -> bool {
-        self.tls.is_inited()
+        // self.tls.is_inited()
+        false
     }
 
     /// Set whether this instance is active or passive.
@@ -204,12 +197,13 @@ impl Dtls {
     /// i.e. initiating the client hello or not. This must be called
     /// exactly once before starting to handshake (I/O).
     pub fn set_active(&mut self, active: bool) {
-        self.tls.set_active(active);
+        // self.tls.set_active(active);
     }
 
     /// If set_active, returns what was set.
     pub fn is_active(&self) -> Option<bool> {
-        self.tls.is_active()
+        // self.tls.is_active()
+        None
     }
 
     /// The local fingerprint.
@@ -226,14 +220,15 @@ impl Dtls {
 
     /// Poll for the next datagram to send.
     pub fn poll_datagram(&mut self) -> Option<DatagramSend> {
-        let x = self.tls.inner_mut().pop_outgoing();
-        if let Some(x) = &x {
-            if x.len() > DATAGRAM_MTU_WARN {
-                warn!("DTLS above MTU {}: {}", DATAGRAM_MTU_WARN, x.len());
-            }
-            trace!("Poll datagram: {}", x.len());
-        }
-        x
+        // let x = self.tls.inner_mut().pop_outgoing();
+        // if let Some(x) = &x {
+        //     if x.len() > DATAGRAM_MTU_WARN {
+        //         warn!("DTLS above MTU {}: {}", DATAGRAM_MTU_WARN, x.len());
+        //     }
+        //     trace!("Poll datagram: {}", x.len());
+        // }
+        // x
+        None
     }
 
     /// Poll for an event.
@@ -247,37 +242,38 @@ impl Dtls {
 
     /// Handling incoming data to be sent as DTLS datagrams.
     pub fn handle_input(&mut self, data: &[u8]) -> Result<(), DtlsError> {
-        Ok(self.tls.write_all(data)?)
+        // Ok(self.tls.write_all(data)?)
+        Ok(())
     }
 
     /// Handles an incoming DTLS datagrams.
     pub fn handle_receive(&mut self, r: Receive) -> Result<(), DtlsError> {
-        let message = match r.contents {
-            DatagramRecv::Dtls(v) => v,
-            _ => {
-                trace!("Receive rejected, not DTLS");
-                return Ok(());
-            }
-        };
-
-        self.tls.inner_mut().set_incoming(message);
-
-        if self.handle_handshake()? {
-            // early return as long as we're handshaking
-            return Ok(());
-        }
-
-        let mut buf = vec![0; 2000];
-        let n = match self.tls.read(&mut buf) {
-            Ok(v) => v,
-            Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                return Ok(());
-            }
-            Err(e) => return Err(e.into()),
-        };
-        buf.truncate(n);
-
-        self.events.push_back(DtlsEvent::Data(buf));
+        // let message = match r.contents {
+        //     DatagramRecv::Dtls(v) => v,
+        //     _ => {
+        //         trace!("Receive rejected, not DTLS");
+        //         return Ok(());
+        //     }
+        // };
+        //
+        // self.tls.inner_mut().set_incoming(message);
+        //
+        // if self.handle_handshake()? {
+        //     // early return as long as we're handshaking
+        //     return Ok(());
+        // }
+        //
+        // let mut buf = vec![0; 2000];
+        // let n = match self.tls.read(&mut buf) {
+        //     Ok(v) => v,
+        //     Err(e) if e.kind() == ErrorKind::WouldBlock => {
+        //         return Ok(());
+        //     }
+        //     Err(e) => return Err(e.into()),
+        // };
+        // buf.truncate(n);
+        //
+        // self.events.push_back(DtlsEvent::Data(buf));
 
         Ok(())
     }
@@ -286,34 +282,37 @@ impl Dtls {
     ///
     /// Once handshaken, this becomes a noop.
     pub fn handle_handshake(&mut self) -> Result<bool, DtlsError> {
-        if self.tls.is_handshaken() {
-            // Nice. Nothing to do.
-            Ok(false)
-        } else if self.tls.complete_handshake_until_block()? {
-            self.events.push_back(DtlsEvent::Connected);
+        // if self.tls.is_handshaken() {
+        //     // Nice. Nothing to do.
+        //     Ok(false)
+        // } else if self.tls.complete_handshake_until_block()? {
+        //     self.events.push_back(DtlsEvent::Connected);
+        //
+        //     let (keying_material, srtp_profile, fingerprint) = self
+        //         .tls
+        //         .take_srtp_keying_material()
+        //         .expect("Exported keying material");
+        //
+        //     self.remote_fingerprint = Some(fingerprint.clone());
+        //
+        //     if self.fingerprint_verification {
+        //         self.events
+        //             .push_back(DtlsEvent::RemoteFingerprint(fingerprint));
+        //     }
+        //
+        //     self.events
+        //         .push_back(DtlsEvent::SrtpKeyingMaterial(keying_material, srtp_profile));
+        //     Ok(false)
+        // } else {
+        //     Ok(true)
+        // }
 
-            let (keying_material, srtp_profile, fingerprint) = self
-                .tls
-                .take_srtp_keying_material()
-                .expect("Exported keying material");
-
-            self.remote_fingerprint = Some(fingerprint.clone());
-
-            if self.fingerprint_verification {
-                self.events
-                    .push_back(DtlsEvent::RemoteFingerprint(fingerprint));
-            }
-
-            self.events
-                .push_back(DtlsEvent::SrtpKeyingMaterial(keying_material, srtp_profile));
-            Ok(false)
-        } else {
-            Ok(true)
-        }
+        Ok(false)
     }
 
     pub(crate) fn is_connected(&self) -> bool {
-        self.tls.is_connected()
+        // self.tls.is_connected()
+        false
     }
 }
 
@@ -378,11 +377,11 @@ impl fmt::Debug for DtlsEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Connected => write!(f, "Connected"),
-            Self::SrtpKeyingMaterial(keying_mat, srtp_profile) => f
-                .debug_tuple("SrtpKeyingMaterial")
-                .field(keying_mat)
-                .field(srtp_profile)
-                .finish(),
+            // Self::SrtpKeyingMaterial(keying_mat, srtp_profile) => f
+            //     .debug_tuple("SrtpKeyingMaterial")
+            //     .field(keying_mat)
+            //     .field(srtp_profile)
+            //     .finish(),
             Self::RemoteFingerprint(arg0) => {
                 f.debug_tuple("RemoteFingerprint").field(arg0).finish()
             }

@@ -592,7 +592,7 @@ use thiserror::Error;
 use util::InstantExt;
 
 mod dtls;
-use dtls::DtlsCert;
+// use dtls::DtlsCert;
 use dtls::Fingerprint;
 use dtls::{Dtls, DtlsEvent};
 
@@ -1011,11 +1011,11 @@ impl Rtc {
         Rtc {
             alive: true,
             ice,
-            dtls: Dtls::new(
-                config.dtls_cert.unwrap_or_else(DtlsCert::new),
-                config.fingerprint_verification,
-            )
-            .expect("DTLS to init without problem"),
+            // dtls: Dtls::new(
+            //     config.dtls_cert.unwrap_or_else(DtlsCert::new),
+            //     config.fingerprint_verification,
+            // )
+            // .expect("DTLS to init without problem"),
             session,
             sctp: RtcSctp::new(),
             chan: ChannelHandler::default(),
@@ -1027,6 +1027,7 @@ impl Rtc {
             peer_bytes_rx: 0,
             peer_bytes_tx: 0,
             change_counter: 0,
+            dtls: todo!(),
         }
     }
 
@@ -1309,37 +1310,37 @@ impl Rtc {
 
         let mut dtls_connected = false;
 
-        while let Some(e) = self.dtls.poll_event() {
-            match e {
-                DtlsEvent::Connected => {
-                    debug!("DTLS connected");
-                    dtls_connected = true;
-                }
-                DtlsEvent::SrtpKeyingMaterial(mat, srtp_profile) => {
-                    info!(
-                        "DTLS set SRTP keying material and profile: {}",
-                        srtp_profile
-                    );
-                    let active = self.dtls.is_active().expect("DTLS must be inited by now");
-                    self.session.set_keying_material(mat, srtp_profile, active);
-                }
-                DtlsEvent::RemoteFingerprint(v1) => {
-                    debug!("DTLS verify remote fingerprint");
-                    if let Some(v2) = &self.remote_fingerprint {
-                        if v1 != *v2 {
-                            self.disconnect();
-                            return Err(RtcError::RemoteSdp("remote fingerprint no match".into()));
-                        }
-                    } else {
-                        self.disconnect();
-                        return Err(RtcError::RemoteSdp("no a=fingerprint before dtls".into()));
-                    }
-                }
-                DtlsEvent::Data(v) => {
-                    self.sctp.handle_input(self.last_now, &v);
-                }
-            }
-        }
+        // while let Some(e) = self.dtls.poll_event() {
+        //     match e {
+        //         DtlsEvent::Connected => {
+        //             debug!("DTLS connected");
+        //             dtls_connected = true;
+        //         }
+        //         DtlsEvent::SrtpKeyingMaterial(mat, srtp_profile) => {
+        //             info!(
+        //                 "DTLS set SRTP keying material and profile: {}",
+        //                 srtp_profile
+        //             );
+        //             let active = self.dtls.is_active().expect("DTLS must be inited by now");
+        //             self.session.set_keying_material(mat, srtp_profile, active);
+        //         }
+        //         DtlsEvent::RemoteFingerprint(v1) => {
+        //             debug!("DTLS verify remote fingerprint");
+        //             if let Some(v2) = &self.remote_fingerprint {
+        //                 if v1 != *v2 {
+        //                     self.disconnect();
+        //                     return Err(RtcError::RemoteSdp("remote fingerprint no match".into()));
+        //                 }
+        //             } else {
+        //                 self.disconnect();
+        //                 return Err(RtcError::RemoteSdp("no a=fingerprint before dtls".into()));
+        //             }
+        //         }
+        //         DtlsEvent::Data(v) => {
+        //             self.sctp.handle_input(self.last_now, &v);
+        //         }
+        //     }
+        // }
 
         if dtls_connected {
             return Ok(Output::Event(Event::Connected));
@@ -1680,7 +1681,7 @@ impl Rtc {
 #[derive(Debug, Clone)]
 pub struct RtcConfig {
     local_ice_credentials: IceCreds,
-    dtls_cert: Option<DtlsCert>,
+    // dtls_cert: Option<DtlsCert>,
     fingerprint_verification: bool,
     ice_lite: bool,
     codec_config: CodecConfig,
@@ -1707,43 +1708,43 @@ impl RtcConfig {
         &self.local_ice_credentials
     }
 
-    /// Get the configured DTLS certificate, if set.
-    ///
-    /// Returns [`None`] if no DTLS certificate is set. In such cases,
-    /// the certificate will be created on build and you can use the
-    /// direct API on an [`Rtc`] instance to obtain the local
-    /// DTLS fingerprint.
-    ///
-    /// ```
-    /// use str0m::RtcConfig;
-    ///
-    /// let fingerprint = RtcConfig::default()
-    ///     .build()
-    ///     .direct_api()
-    ///     .local_dtls_fingerprint();
-    /// ```
-    pub fn dtls_cert(&self) -> Option<&DtlsCert> {
-        self.dtls_cert.as_ref()
-    }
+    // /// Get the configured DTLS certificate, if set.
+    // ///
+    // /// Returns [`None`] if no DTLS certificate is set. In such cases,
+    // /// the certificate will be created on build and you can use the
+    // /// direct API on an [`Rtc`] instance to obtain the local
+    // /// DTLS fingerprint.
+    // ///
+    // /// ```
+    // /// use str0m::RtcConfig;
+    // ///
+    // /// let fingerprint = RtcConfig::default()
+    // ///     .build()
+    // ///     .direct_api()
+    // ///     .local_dtls_fingerprint();
+    // /// ```
+    // pub fn dtls_cert(&self) -> Option<&DtlsCert> {
+    //     self.dtls_cert.as_ref()
+    // }
 
-    /// Set the DTLS certificate for secure communication.
-    ///
-    /// Generating a certificate can be a time-consuming process.
-    /// Use this API to reuse a previously created [`DtlsCert`] if available.
-    ///
-    /// ```
-    /// use str0m::RtcConfig;
-    /// use str0m::change::DtlsCert;
-    ///
-    /// let dtls_cert = DtlsCert::new();
-    ///
-    /// let rtc_config = RtcConfig::default()
-    ///     .set_dtls_cert(dtls_cert);
-    /// ```
-    pub fn set_dtls_cert(mut self, dtls_cert: DtlsCert) -> Self {
-        self.dtls_cert = Some(dtls_cert);
-        self
-    }
+    // /// Set the DTLS certificate for secure communication.
+    // ///
+    // /// Generating a certificate can be a time-consuming process.
+    // /// Use this API to reuse a previously created [`DtlsCert`] if available.
+    // ///
+    // /// ```
+    // /// use str0m::RtcConfig;
+    // /// use str0m::change::DtlsCert;
+    // ///
+    // /// let dtls_cert = DtlsCert::new();
+    // ///
+    // /// let rtc_config = RtcConfig::default()
+    // ///     .set_dtls_cert(dtls_cert);
+    // /// ```
+    // pub fn set_dtls_cert(mut self, dtls_cert: DtlsCert) -> Self {
+    //     self.dtls_cert = Some(dtls_cert);
+    //     self
+    // }
 
     /// Toggle ice lite. Ice lite is a mode for WebRTC servers with public IP address.
     /// An [`Rtc`] instance in ice lite mode will not make STUN binding requests, but only
@@ -2111,7 +2112,7 @@ impl Default for RtcConfig {
     fn default() -> Self {
         Self {
             local_ice_credentials: IceCreds::new(),
-            dtls_cert: None,
+            // dtls_cert: None,
             fingerprint_verification: true,
             ice_lite: false,
             codec_config: CodecConfig::new_with_defaults(),

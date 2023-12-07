@@ -14,12 +14,12 @@ use crate::packet::QueuePriority;
 use crate::packet::QueueSnapshot;
 use crate::packet::QueueState;
 use crate::rtp_::Bitrate;
+use crate::rtp_::SeqNo;
 use crate::rtp_::{extend_u16, Descriptions, ReportList, Rtcp};
 use crate::rtp_::{ExtensionMap, ReceptionReport, RtpHeader};
 use crate::rtp_::{ExtensionValues, Frequency, MediaTime, Mid, NackEntry};
 use crate::rtp_::{Pt, Rid, RtcpFb, SenderInfo, SenderReport, Ssrc};
 use crate::rtp_::{Sdes, SdesType, MAX_BLANK_PADDING_PAYLOAD_SIZE};
-use crate::rtp_::{SeqNo, SRTP_BLOCK_SIZE};
 use crate::session::PacketReceipt;
 use crate::stats::MediaEgressStats;
 use crate::stats::StatsSnapshot;
@@ -429,7 +429,8 @@ impl StreamTx {
                     &mut buf[..],
                     header_len,
                     body_len + original_seq_len,
-                    SRTP_BLOCK_SIZE,
+                    // SRTP_BLOCK_SIZE,
+                    0,
                 );
 
                 body_len + original_seq_len + pad_len
@@ -439,7 +440,8 @@ impl StreamTx {
                     &mut buf[..],
                     header_len,
                     len,
-                    SRTP_BLOCK_SIZE,
+                    // SRTP_BLOCK_SIZE,
+                    0,
                 );
 
                 if len == 0 {
@@ -625,7 +627,8 @@ impl StreamTx {
 
         let len = self
             .padding
-            .clamp(SRTP_BLOCK_SIZE, MAX_BLANK_PADDING_PAYLOAD_SIZE);
+            // .clamp(SRTP_BLOCK_SIZE, MAX_BLANK_PADDING_PAYLOAD_SIZE);
+            .clamp(0, MAX_BLANK_PADDING_PAYLOAD_SIZE);
         assert!(len <= 255); // should fit in a byte
 
         self.padding = self.padding.saturating_sub(len);
