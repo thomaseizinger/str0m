@@ -166,7 +166,7 @@ impl Candidate {
             parse_proto(proto)?,
             None,
             addr,
-            Some(addr),
+            None,
             CandidateKind::Host,
             None,
             None,
@@ -177,8 +177,11 @@ impl Candidate {
     ///
     /// Server reflexive candidates are local sockets mapped to external ip discovered
     /// via a STUN binding request.
+    ///
+    /// `base` is the local interface that was used to generate this server-reflexive candidate.
     pub fn server_reflexive(
         addr: SocketAddr,
+        base: SocketAddr,
         proto: impl TryInto<Protocol>,
     ) -> Result<Self, IceError> {
         if !is_valid_ip(addr.ip()) {
@@ -191,7 +194,7 @@ impl Candidate {
             parse_proto(proto)?,
             None,
             addr,
-            Some(addr),
+            Some(base),
             CandidateKind::ServerReflexive,
             None,
             None,
@@ -202,7 +205,13 @@ impl Candidate {
     ///
     /// Relayed candidates are server sockets relaying traffic to a local socket.
     /// Allocate a TURN addr to use as a local candidate.
-    pub fn relayed(addr: SocketAddr, proto: impl TryInto<Protocol>) -> Result<Self, IceError> {
+    ///
+    /// `base` is the local interface that was used to generate this relay candidate candidate.
+    pub fn relayed(
+        addr: SocketAddr,
+        base: SocketAddr,
+        proto: impl TryInto<Protocol>,
+    ) -> Result<Self, IceError> {
         if !is_valid_ip(addr.ip()) {
             return Err(IceError::BadCandidate(format!("invalid ip {}", addr.ip())));
         }
@@ -213,7 +222,7 @@ impl Candidate {
             parse_proto(proto)?,
             None,
             addr,
-            Some(addr),
+            Some(base),
             CandidateKind::Relayed,
             None,
             None,
@@ -594,6 +603,7 @@ mod tests {
     #[test]
     fn to_string() {
         let socket_addr = "1.2.3.4:9876".parse().unwrap();
+        let base_addr = "5.6.7.8:9876".parse().unwrap();
         let mut candidate = Candidate::host(socket_addr, Protocol::Udp).unwrap();
         assert_eq!(
             candidate.to_string(),
@@ -611,10 +621,10 @@ mod tests {
             candidate.to_string(),
             "candidate:6812072969737413130 1 udp 2130706175 1.2.3.4 9876 typ host raddr 5.5.5.5 rport 5555 ufrag ufrag");
 
-        let candidate = Candidate::relayed(socket_addr, Protocol::SslTcp).unwrap();
+        let candidate = Candidate::relayed(socket_addr, base_addr, Protocol::SslTcp).unwrap();
         assert_eq!(
             candidate.to_string(),
-            "candidate:432709134138909083 1 ssltcp 16776959 1.2.3.4 9876 typ relay"
+            "candidate:3277613221947035242 1 ssltcp 16776959 1.2.3.4 9876 typ relay"
         );
     }
 
