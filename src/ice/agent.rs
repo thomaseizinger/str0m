@@ -10,6 +10,7 @@ use crate::util::NonCryptographicRng;
 
 use super::candidate::{Candidate, CandidateKind};
 use super::pair::{CandidatePair, CheckState, PairId};
+use crate::net::Source;
 
 /// Timing advance (Ta) value.
 ///
@@ -79,7 +80,7 @@ pub struct IceAgent {
 
     /// Remote addresses we have seen traffic appear from. This is used
     /// to dedupe [`IceAgentEvent::DiscoveredRecv`].
-    discovered_recv: HashSet<(Protocol, SocketAddr)>,
+    discovered_recv: HashSet<(Protocol, Source)>,
 
     /// Currently nominated pair for sending. This is used to evaluate
     /// if we get a better candidate for [`IceAgentEvent::NominatedSend`].
@@ -93,7 +94,7 @@ pub struct IceAgent {
 struct StunRequest {
     now: Instant,
     proto: Protocol,
-    source: SocketAddr,
+    source: Source,
     destination: SocketAddr,
     trans_id: TransId,
     prio: u32,
@@ -202,7 +203,7 @@ pub enum IceAgentEvent {
         /// The protocol to use for the socket.
         proto: Protocol,
         /// The remote socket to look out for.
-        source: SocketAddr,
+        source: Source,
     },
 
     /// A nominated local and remote socket for sending data.
@@ -217,7 +218,7 @@ pub enum IceAgentEvent {
         ///
         /// This will correspond to some local address added to
         /// [`IceAgent::add_local_candidate`].
-        source: SocketAddr,
+        source: Source,
         /// The remote address to send datagrams to.
         destination: SocketAddr,
     },
@@ -1204,7 +1205,7 @@ impl IceAgent {
 
         let local = pair.local_candidate(&self.local_candidates);
         let proto = local.proto();
-        let local_addr = local.base();
+        let local_addr = local.source();
         let remote = pair.remote_candidate(&self.remote_candidates);
         let remote_addr = remote.addr();
 
@@ -1274,7 +1275,7 @@ impl IceAgent {
 
         debug!(
             "Send STUN request: {} -> {} {:?}",
-            local.base(),
+            local.source(),
             remote.addr(),
             binding
         );
@@ -1288,7 +1289,7 @@ impl IceAgent {
 
         let trans = Transmit {
             proto: local.proto(),
-            source: local.base(),
+            source: local.source(),
             destination: remote.addr(),
             contents: buf.into(),
         };
@@ -1359,7 +1360,9 @@ impl IceAgent {
 
             // o  The base is the local candidate of the candidate pair from which
             //     the Binding request was sent.
-            let base = local_sent_from.base();
+            let base = local_sent_from
+                .base()
+                .expect("to have base for local candidate");
 
             // o  The type is peer reflexive.
             let candidate = Candidate::peer_reflexive(
@@ -1452,7 +1455,7 @@ impl IceAgent {
             self.nominated_send = Some(best);
             self.emit_event(IceAgentEvent::NominatedSend {
                 proto: local.proto(),
-                source: local.base(),
+                source: local.source(),
                 destination: remote.addr(),
             })
         }

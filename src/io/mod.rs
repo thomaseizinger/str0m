@@ -66,13 +66,31 @@ pub struct Transmit {
     /// The source socket this packet should be sent from.
     ///
     /// For ICE it's important to match up outgoing packets with source network interface.
-    pub source: SocketAddr,
+    pub source: Source,
 
     /// This socket this datagram should be sent to.
     pub destination: SocketAddr,
 
     /// Contents of the datagram.
     pub contents: DatagramSend,
+}
+
+/// Where to send a packet from.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub enum Source {
+    /// To be sent from the given host.
+    Host(SocketAddr),
+    /// To be sent from a relay (via an allocation).
+    Relay(SocketAddr),
+}
+
+impl fmt::Display for Source {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Source::Host(i) => write!(f, "Host({i})"),
+            Source::Relay(i) => write!(f, "Relay({i})"),
+        }
+    }
 }
 
 /// A wrapper for some payload that is to be sent.
@@ -98,7 +116,7 @@ pub struct Receive<'a> {
     pub proto: Protocol,
 
     /// The socket this received data originated from.
-    pub source: SocketAddr,
+    pub source: Source,
 
     /// The destination ip of the datagram.
     pub destination: SocketAddr,
@@ -111,7 +129,7 @@ impl<'a> Receive<'a> {
     /// Creates a new instance by trying to parse the contents of `buf`.
     pub fn new(
         proto: Protocol,
-        source: SocketAddr,
+        source: Source,
         destination: SocketAddr,
         buf: &'a [u8],
     ) -> Result<Self, NetError> {
@@ -131,7 +149,7 @@ pub struct StunPacket<'a> {
     /// The protocol the socket this received data originated from is using.
     pub proto: Protocol,
     /// The socket this received data originated from.
-    pub source: SocketAddr,
+    pub source: Source,
     /// The destination socket of the datagram.
     pub destination: SocketAddr,
     /// The STUN message.

@@ -698,7 +698,7 @@ mod streams;
 
 /// Network related types to get socket data in/out of [`Rtc`].
 pub mod net {
-    pub use crate::io::{DatagramRecv, DatagramSend, Protocol, Receive, Transmit};
+    pub use crate::io::{DatagramRecv, DatagramSend, Protocol, Receive, Source, Transmit};
 }
 
 /// Various error types.
@@ -843,7 +843,7 @@ pub struct Rtc {
     stats: Option<Stats>,
     session: Session,
     remote_fingerprint: Option<Fingerprint>,
-    remote_addrs: Vec<SocketAddr>,
+    remote_addrs: Vec<Source>,
     send_addr: Option<SendAddr>,
     last_now: Instant,
     peer_bytes_rx: u64,
@@ -853,7 +853,7 @@ pub struct Rtc {
 
 struct SendAddr {
     proto: net::Protocol,
-    source: SocketAddr,
+    source: Source,
     destination: SocketAddr,
 }
 
@@ -1507,7 +1507,10 @@ impl Rtc {
             // TODO: This assume symmetrical routing, i.e. we are getting
             // the incoming traffic from a remote peer from the same socket address
             // we've nominated for sending via the ICE agent.
-            if r.source == send_addr.destination {
+            if match r.source {
+                Source::Host(s) => s == send_addr.destination,
+                Source::Relay(s) => s == send_addr.destination,
+            } {
                 return true;
             }
         }
@@ -2203,6 +2206,7 @@ macro_rules! log_stat {
     };
 }
 pub(crate) use log_stat;
+use net::Source;
 
 #[cfg(test)]
 mod test {

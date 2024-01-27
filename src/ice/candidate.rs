@@ -1,5 +1,6 @@
 use super::IceError;
 use crate::io::Protocol;
+use crate::net::Source;
 use crate::sdp::parse_candidate;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
@@ -296,7 +297,11 @@ impl Candidate {
         self.kind.hash(&mut hasher);
 
         //  o  Their bases have the same IP address (the ports can be different).
-        self.base().ip().hash(&mut hasher);
+        if let Some(base) = self.base() {
+            base.ip().hash(&mut hasher);
+        }
+
+        // TODO: Same `addr` here?
 
         //  o  For reflexive and relayed candidates, the STUN or TURN servers
         //     used to obtain them have the same IP address (the IP address used
@@ -391,8 +396,19 @@ impl Candidate {
         self.proto
     }
 
-    pub(crate) fn base(&self) -> SocketAddr {
-        self.base.unwrap_or(self.addr)
+    pub(crate) fn base(&self) -> Option<SocketAddr> {
+        self.base
+    }
+
+    pub(crate) fn source(&self) -> Source {
+        match self.kind {
+            CandidateKind::Host => Source::Host(self.addr),
+            CandidateKind::PeerReflexive => Source::Host(self.addr),
+            CandidateKind::ServerReflexive => Source::Host(self.addr),
+            CandidateKind::Relayed => {
+                Source::Host(self.base.expect("base to be set for relay candidates"))
+            }
+        }
     }
 
     pub(crate) fn raddr(&self) -> Option<SocketAddr> {
