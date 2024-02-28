@@ -48,7 +48,7 @@ mod test {
         assert_eq!(
             a1.stats(),
             IceAgentStats {
-                bind_request_sent: 9,
+                bind_request_sent: 8,
                 bind_success_recv: 0,
                 bind_request_recv: 0,
                 discovered_recv_count: 0,
@@ -59,7 +59,7 @@ mod test {
         assert_eq!(
             a2.stats(),
             IceAgentStats {
-                bind_request_sent: 9,
+                bind_request_sent: 8,
                 bind_success_recv: 0,
                 bind_request_recv: 0,
                 discovered_recv_count: 0,
@@ -196,9 +196,9 @@ mod test {
         assert_eq!(
             a1.stats(),
             IceAgentStats {
-                bind_request_sent: 11,
+                bind_request_sent: 10,
                 bind_success_recv: 2,
-                bind_request_recv: 11,
+                bind_request_recv: 10,
                 discovered_recv_count: 1,
                 nomination_send_count: 1,
             }
@@ -207,7 +207,7 @@ mod test {
         assert_eq!(
             a2.stats(),
             IceAgentStats {
-                bind_request_sent: 11,
+                bind_request_sent: 10,
                 bind_success_recv: 2,
                 bind_request_recv: 2,
                 discovered_recv_count: 1,
@@ -344,7 +344,7 @@ mod test {
         assert_eq!(
             a2.stats(),
             IceAgentStats {
-                bind_request_sent: 9,
+                bind_request_sent: 8,
                 bind_success_recv: 0,
                 bind_request_recv: 0,
                 discovered_recv_count: 0,
