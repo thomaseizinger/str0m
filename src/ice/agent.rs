@@ -746,6 +746,10 @@ impl IceAgent {
     /// TODO
     pub fn clear_nominated(&mut self) {
         self.nominated_send = None;
+
+        for p in &mut self.candidate_pairs {
+            p.clear_success_nomination();
+        }
     }
 
     /// Discard candidate pairs that contain the candidate identified by a local index.
