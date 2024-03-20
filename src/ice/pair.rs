@@ -364,12 +364,6 @@ impl CandidatePair {
         self.remote_binding_requests = other.remote_binding_requests;
         self.remote_binding_request_time = other.remote_binding_request_time;
     }
-
-    pub(crate) fn reset_nomination(&mut self) {
-        if self.is_nominated() {
-            self.nomination_state = NominationState::None;
-        }
-    }
 }
 
 impl PartialEq for CandidatePair {

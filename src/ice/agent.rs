@@ -743,17 +743,8 @@ impl IceAgent {
         self.set_connection_state(IceConnectionState::Checking, "ice restart");
     }
 
-    /// Clears the nomination state from all candidate pairs.
-    ///
-    /// This is a soft-form of ICE restart that retains all candidates and credentials and simply re-evaluates,
-    /// which pair should be the nomainted one.
-    ///
-    /// Calling this without adding new candidates is likely a no-op.
+    /// TODO
     pub fn clear_nominated(&mut self) {
-        for pair in &mut self.candidate_pairs {
-            pair.reset_nomination();
-        }
-
         self.nominated_send = None;
     }
 
