@@ -367,7 +367,7 @@ impl CandidatePair {
 
     pub(crate) fn clear_success_nomination(&mut self) {
         if self.nomination_state == NominationState::Success {
-            self.nomination_state = NominationState::None
+            self.nomination_state = NominationState::Nominated
         }
     }
 }
