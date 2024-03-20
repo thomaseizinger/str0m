@@ -601,6 +601,11 @@ impl IceAgent {
                     continue 'outer;
                 }
 
+                // Candidates in a pair must share the same IP version
+                if local.addr().is_ipv4() != remote.addr().is_ipv4() {
+                    continue 'outer;
+                }
+
                 let prio =
                     CandidatePair::calculate_prio(self.controlling, remote.prio(), local.prio());
                 let mut pair = CandidatePair::new(*local_idx, *remote_idx, prio);
@@ -744,12 +749,27 @@ impl IceAgent {
     }
 
     /// TODO
-    pub fn clear_nominated(&mut self) {
+    pub fn clear_pairs_and_rerun_nomination(&mut self) {
         self.nominated_send = None;
+        self.candidate_pairs.clear();
 
-        for p in &mut self.candidate_pairs {
-            p.clear_success_nomination();
-        }
+        let local_idxs: Vec<_> = self
+            .local_candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| !v.discarded())
+            .map(|(i, _)| i)
+            .collect();
+
+        let remote_idxs: Vec<_> = self
+            .remote_candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| !v.discarded())
+            .map(|(i, _)| i)
+            .collect();
+
+        self.form_pairs(&local_idxs, &remote_idxs);
     }
 
     /// Discard candidate pairs that contain the candidate identified by a local index.
