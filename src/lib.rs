@@ -843,6 +843,7 @@ pub struct Rtc {
     remote_fingerprint: Option<Fingerprint>,
     remote_addrs: Vec<SocketAddr>,
     send_addr: Option<SendAddr>,
+    need_init_time: bool,
     last_now: Instant,
     peer_bytes_rx: u64,
     peer_bytes_tx: u64,
@@ -1010,7 +1011,8 @@ impl Rtc {
     pub(crate) fn new_from_config(config: RtcConfig) -> Self {
         let session = Session::new(&config);
 
-        let mut ice = IceAgent::with_local_credentials(config.local_ice_credentials);
+        let local_creds = config.local_ice_credentials.unwrap_or_else(IceCreds::new);
+        let mut ice = IceAgent::with_local_credentials(local_creds);
         if config.ice_lite {
             ice.set_ice_lite(config.ice_lite);
         }
@@ -1039,6 +1041,7 @@ impl Rtc {
             remote_fingerprint: None,
             remote_addrs: vec![],
             send_addr: None,
+            need_init_time: true,
             last_now: already_happened(),
             peer_bytes_rx: 0,
             peer_bytes_tx: 0,
@@ -1471,7 +1474,8 @@ impl Rtc {
     /// [`Input::Timeout`] is always accepted. [`Input::Receive`] is tested against the nominated
     /// ICE candidate. If that doesn't match and the incoming data is a STUN packet, the accept call
     /// is delegated to the ICE agent which recognizes the remote peer from `a=ufrag`/`a=password`
-    /// credentials negotiated in the SDP.
+    /// credentials negotiated in the SDP. If that also doesn't match, all remote ICE candidates are
+    /// checked for a match.
     ///
     /// In a server setup, the server would try to find an `Rtc` instances using [`Rtc::accepts()`].
     /// The first found instance would be given the input via [`Rtc::handle_input()`].
@@ -1500,11 +1504,9 @@ impl Rtc {
             return true;
         };
 
-        // This should cover Dtls, Rtp and Rtcp
+        // Fast path: DTLS, RTP, and RTCP traffic coming in from the same socket address
+        // we've nominated for sending via the ICE agent. This is the typical case
         if let Some(send_addr) = &self.send_addr {
-            // TODO: This assume symmetrical routing, i.e. we are getting
-            // the incoming traffic from a remote peer from the same socket address
-            // we've nominated for sending via the ICE agent.
             if r.source == send_addr.destination {
                 return true;
             }
@@ -1514,6 +1516,13 @@ impl Rtc {
         // to this Rtc instance.
         if let DatagramRecvInner::Stun(v) = &r.contents.inner {
             return self.ice.accepts_message(v);
+        }
+
+        // Slow path: Occasionally, traffic comes in on a socket address corresponding
+        // to a successful candidate pair other than the one we've currently nominated.
+        // This typically happens at the beginning of the connection
+        if self.ice.has_viable_remote_candidate(r.source) {
+            return true;
         }
 
         false
@@ -1559,9 +1568,16 @@ impl Rtc {
     }
 
     fn init_time(&mut self, now: Instant) {
+        // The operation is somewhat expensive, hence we only do it once.
+        if !self.need_init_time {
+            return;
+        }
+
         // We assume this first "now" is a time 0 start point for calculating ntp/unix time offsets.
         // This initializes the conversion of Instant -> NTP/Unix time.
         let _ = now.to_unix_duration();
+
+        self.need_init_time = false;
     }
 
     fn do_handle_timeout(&mut self, now: Instant) -> Result<(), RtcError> {
@@ -1602,15 +1618,15 @@ impl Rtc {
         self.peer_bytes_rx += bytes_rx as u64;
 
         match r.contents.inner {
-            Stun(stun) => self.ice.handle_packet(
-                now,
-                io::StunPacket {
+            Stun(stun) => {
+                let packet = io::StunPacket {
                     proto: r.proto,
                     source: r.source,
                     destination: r.destination,
                     message: stun,
-                },
-            ),
+                };
+                self.ice.handle_packet(now, packet);
+            }
             Dtls(dtls) => self.dtls.handle_receive(dtls)?,
             Rtp(rtp) => self.session.handle_rtp_receive(now, rtp),
             Rtcp(rtcp) => self.session.handle_rtcp_receive(now, rtcp),
@@ -1687,7 +1703,7 @@ impl Rtc {
 /// Configs implement [`Clone`] to help create multiple `Rtc` instances.
 #[derive(Debug, Clone)]
 pub struct RtcConfig {
-    local_ice_credentials: IceCreds,
+    local_ice_credentials: Option<IceCreds>,
     dtls_cert: Option<DtlsCert>,
     fingerprint_verification: bool,
     ice_lite: bool,
@@ -1710,10 +1726,20 @@ impl RtcConfig {
         RtcConfig::default()
     }
 
-    /// The auto generated local ice credentials.
+    /// Get the local ICE credentials, if set.
+    ///
+    /// If not specified, local credentials will be randomly generated when
+    /// building the [`Rtc`] instance.
     #[cfg_attr(not(feature = "ice-agent"), doc(hidden))]
-    pub fn local_ice_credentials(&self) -> &IceCreds {
+    pub fn local_ice_credentials(&self) -> &Option<IceCreds> {
         &self.local_ice_credentials
+    }
+
+    /// Explicitly sets local ICE credentials.
+    #[cfg_attr(not(feature = "ice-agent"), doc(hidden))]
+    pub fn set_local_ice_credentials(mut self, local_ice_credentials: IceCreds) -> Self {
+        self.local_ice_credentials = Some(local_ice_credentials);
+        self
     }
 
     /// Get the configured DTLS certificate, if set.
@@ -2125,7 +2151,7 @@ impl RtcConfig {
 impl Default for RtcConfig {
     fn default() -> Self {
         Self {
-            local_ice_credentials: IceCreds::new(),
+            local_ice_credentials: None,
             dtls_cert: None,
             fingerprint_verification: true,
             ice_lite: false,

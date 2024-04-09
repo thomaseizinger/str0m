@@ -2,7 +2,7 @@ use std::collections::{HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use crate::io::{Id, DATAGRAM_MTU_WARN};
+use crate::io::{Id, StunClass, StunMethod, DATAGRAM_MTU_WARN};
 use crate::io::{Protocol, StunPacket};
 use crate::io::{StunMessage, TransId, STUN_TIMEOUT};
 use crate::io::{Transmit, DATAGRAM_MTU};
@@ -305,6 +305,15 @@ impl IceAgent {
     /// Remote ice candidates.
     pub fn remote_candidates(&self) -> &[Candidate] {
         &self.remote_candidates
+    }
+
+    /// Determines whether any remote candidates match the specified address and
+    /// have been verified with a STUN request/response.
+    pub fn has_viable_remote_candidate(&self, addr: SocketAddr) -> bool {
+        self.candidate_pairs
+            .iter()
+            .filter(|cand| cand.state() == CheckState::Succeeded)
+            .any(|pair| self.remote_candidates[pair.remote_idx()].addr() == addr)
     }
 
     /// Sets the remote ice credentials.
@@ -713,7 +722,6 @@ impl IceAgent {
     /// process.
     #[allow(unused)]
     pub fn ice_restart(&mut self, local_credentials: IceCreds, keep_local_candidates: bool) {
-        info!("ICE restart");
         // An ICE agent MAY restart ICE for existing data streams.  An ICE
         // restart causes all previous states of the data streams, excluding the
         // roles of the agents, to be flushed.  The only difference between an
@@ -753,82 +761,95 @@ impl IceAgent {
     /// Tells whether the message is for this agent instance.
     ///
     /// This is used to multiplex multiple ice agents on a server sharing the same UDP socket.
-    /// For this to work, the server should operate in ice-lite mode and not initiate any
-    /// binding requests itself.
     ///
-    /// If no remote credentials have been set using `set_remote_credentials`, the remote
-    /// ufrag is not checked.
+    /// For binding requests, if no remote credentials have been set using
+    /// `set_remote_credentials`, the remote ufrag is not checked.
     pub fn accepts_message(&self, message: &StunMessage<'_>) -> bool {
         trace!("Check if accepts message: {:?}", message);
 
-        // The username for the credential is formed by concatenating the
-        // username fragment provided by the peer with the username fragment of
-        // the ICE agent sending the request, separated by a colon (":").
-        if message.is_binding_request() {
-            // The existence of USERNAME is checked in the STUN parser.
-            let (local, remote) = message.split_username().unwrap();
+        let do_integrity_check = |is_request: bool| -> bool {
+            let (_, password) = self.stun_credentials(is_request);
+            let integrity_passed = message.check_integrity(&password);
 
-            let local_creds = self.local_credentials();
-            if local != local_creds.ufrag {
-                trace!(
-                    "Message rejected, local user mismatch: {} != {}",
-                    local,
-                    local_creds.ufrag
-                );
-                return false;
+            // The integrity is always the last thing we check
+            if integrity_passed {
+                trace!("Message accepted");
+            } else {
+                trace!("Message rejected, integrity check failed");
             }
+            integrity_passed
+        };
 
-            if let Some(remote_creds) = &self.remote_credentials {
-                if remote != remote_creds.ufrag {
+        let method = message.method();
+        let class = message.class();
+        match (method, class) {
+            (StunMethod::Binding, StunClass::Request | StunClass::Indication) => {
+                // The username for the credential is formed by concatenating the
+                // username fragment provided by the peer with the username fragment of
+                // the ICE agent sending the request, separated by a colon (":").
+                // The existence of this username is checked in the STUN parser.
+                let (local, remote) = message.split_username().unwrap();
+
+                let local_creds = self.local_credentials();
+                if local != local_creds.ufrag {
                     trace!(
-                        "Message rejected, remote user mismatch: {} != {}",
-                        remote,
-                        remote_creds.ufrag
+                        "Message rejected, local user mismatch: {} != {}",
+                        local,
+                        local_creds.ufrag
                     );
                     return false;
                 }
+
+                if let Some(remote_creds) = &self.remote_credentials {
+                    if remote != remote_creds.ufrag {
+                        trace!(
+                            "Message rejected, remote user mismatch: {} != {}",
+                            remote,
+                            remote_creds.ufrag
+                        );
+                        return false;
+                    }
+                }
+
+                do_integrity_check(true)
+            }
+            (StunMethod::Binding, StunClass::Success | StunClass::Failure) => {
+                let belongs_to_a_candidate_pair = self
+                    .candidate_pairs
+                    .iter()
+                    .any(|pair| pair.has_binding_attempt(message.trans_id()));
+
+                if !belongs_to_a_candidate_pair {
+                    trace!("Message rejected, transaction ID does not belong to any of our candidate pairs");
+                    return false;
+                }
+
+                do_integrity_check(false)
+            }
+            (StunMethod::Binding, StunClass::Unknown) => {
+                // Without a known class, it's impossible to know how to validate the message
+                trace!("Message rejected, unknown STUN class");
+                false
+            }
+            (StunMethod::Unknown, _) => {
+                // Without a known method, it's impossible to know how to validate the message
+                trace!("Message rejected, unknown STUN method");
+                false
             }
         }
-
-        if message.is_successful_binding_response() {
-            let belongs_to_a_candidate_pair = self
-                .candidate_pairs
-                .iter()
-                .any(|pair| pair.has_binding_attempt(message.trans_id()));
-
-            if !belongs_to_a_candidate_pair {
-                trace!("Message rejected, transaction ID does not belong to any of our candidate pairs");
-                return false;
-            }
-        }
-
-        // The integrity check below may panic if no remote ICE credentials yet exist
-        if self.remote_credentials.is_none() {
-            trace!("Message rejected, no remote ICE credentials");
-            return false;
-        }
-
-        let (_, password) = self.stun_credentials(!message.is_response());
-        if !message.check_integrity(&password) {
-            trace!("Message rejected, integrity check failed");
-            return false;
-        }
-
-        trace!("Message accepted");
-        true
     }
 
     /// Handles an incoming STUN message.
     ///
     /// Will not be used if [`IceAgent::accepts_message`] returns false.
-    pub fn handle_packet(&mut self, now: Instant, packet: StunPacket) {
+    pub fn handle_packet(&mut self, now: Instant, packet: StunPacket) -> bool {
         trace!("Handle receive: {:?}", &packet.message);
 
         // Regardless of whether we have remote_creds at this point, we can
         // at least check the message integrity.
         if !self.accepts_message(&packet.message) {
             debug!("Message not accepted");
-            return;
+            return false;
         }
 
         if packet.message.is_binding_request() {
@@ -843,6 +864,8 @@ impl IceAgent {
         });
 
         // TODO handle unsuccessful responses.
+
+        true
     }
 
     /// Provide the current time to the [`IceAgent`].
@@ -1148,25 +1171,28 @@ impl IceAgent {
             self.remote_candidates.len() - 1
         };
 
-        let local_idx = self
-            .local_candidates
-            .iter()
-            .enumerate()
-            .find(|(_, v)| {
-                // The local candidate will be
-                // either a host candidate (for cases where the request was not received
-                // through a relay) or a relayed candidate (for cases where it is
-                // received through a relay).  The local candidate can never be a
-                // server-reflexive candidate.
-                matches!(v.kind(), CandidateKind::Host | CandidateKind::Relayed)
-                    && v.addr() == req.destination && v.proto() == req.proto
-            })
-            // Receiving traffic for an IP address that neither is a HOST nor RELAY is a configuration
-            // fault. We need to be aware of the interfaces that the ice agent is connected to.
-            .expect(
-                "STUN request for socket that is neither a host nor a relay candidate. This is a config error.",
-            )
-            .0;
+        let local_idx = match self.local_candidates.iter().enumerate().find(|(_, v)| {
+            // The local candidate will be
+            // either a host candidate (for cases where the request was not received
+            // through a relay) or a relayed candidate (for cases where it is
+            // received through a relay).  The local candidate can never be a
+            // server-reflexive candidate.
+            matches!(v.kind(), CandidateKind::Host | CandidateKind::Relayed)
+                && v.addr() == req.destination
+                && v.proto() == req.proto
+        }) {
+            Some((i, _)) => i,
+            None => {
+                // Receiving traffic for an IP address that neither is a HOST nor RELAY is most likely a configuration fault where the user forgot to add a candidate for the local interface.
+                // We are network-connected application so we need to handle this gracefully: Log a message and discard the packet.
+
+                debug!(
+                    "Discarding STUN request on unknown interface: {}",
+                    req.destination
+                );
+                return;
+            }
+        };
 
         let maybe_pair = self
             .candidate_pairs
@@ -1832,14 +1858,97 @@ mod test {
         assert!(agent.accepts_message(&StunMessage::parse(&valid_reply).unwrap()));
     }
 
+    #[test]
+    fn queues_stun_binding_before_remote_creds() {
+        let mut agent = IceAgent::new();
+        agent.add_local_candidate(Candidate::host(ipv4_1(), "udp").unwrap());
+
+        let remote_creds = IceCreds::new();
+        let mut remote_candidate = Candidate::host(ipv4_3(), "udp").unwrap();
+        remote_candidate.set_ufrag(&remote_creds.ufrag);
+        let prio = remote_candidate.prio();
+        agent.add_remote_candidate(remote_candidate);
+
+        let serialized_req = make_serialized_binding_request(
+            &agent.local_credentials,
+            &remote_creds,
+            !agent.controlling(),
+            prio,
+        );
+        let binding_req = StunMessage::parse(&serialized_req).unwrap();
+
+        // Should not be dropped
+        assert!(agent.accepts_message(&binding_req));
+        agent.handle_packet(
+            Instant::now(),
+            StunPacket {
+                message: binding_req,
+                source: ipv4_3(),
+                destination: ipv4_1(),
+                proto: Protocol::Udp,
+            },
+        );
+
+        // Should not yet get a response
+        agent.handle_timeout(Instant::now());
+        assert!(agent.poll_transmit().is_none());
+
+        agent.set_remote_credentials(remote_creds.clone());
+        agent.handle_timeout(Instant::now());
+
+        // Now should have a response
+        let payload = Vec::from(agent.poll_transmit().unwrap().contents);
+        let stun_message = StunMessage::parse(&payload).unwrap();
+        assert!(stun_message.is_successful_binding_response());
+    }
+
+    #[test]
+    pub fn discards_packet_from_unknown_candidate() {
+        let mut agent = IceAgent::new();
+        let remote_creds = IceCreds::new();
+        agent.set_remote_credentials(remote_creds.clone());
+
+        let request =
+            make_serialized_binding_request(&agent.local_credentials, &remote_creds, false, 0);
+
+        agent.handle_packet(
+            Instant::now(),
+            StunPacket {
+                proto: Protocol::Udp,
+                source: ipv4_1(),
+                destination: ipv4_2(),
+                message: StunMessage::parse(&request).unwrap(),
+            },
+        );
+
+        assert!(agent.poll_transmit().is_none());
+    }
+
+    fn make_serialized_binding_request(
+        local_creds: &IceCreds,
+        remote_creds: &IceCreds,
+        controlling: bool,
+        prio: u32,
+    ) -> Vec<u8> {
+        let username = format!("{}:{}", local_creds.ufrag, remote_creds.ufrag);
+        let binding_req =
+            StunMessage::binding_request(&username, TransId::new(), controlling, 0, prio, false);
+        serialize_stun_msg(binding_req, &local_creds.pass)
+    }
+
     fn make_authenticated_stun_reply(tx_id: TransId, addr: SocketAddr, password: &str) -> Vec<u8> {
         let reply = StunMessage::reply(tx_id, addr);
+        serialize_stun_msg(reply, password)
+    }
 
+    /// Serializing will calculate a message integrity for it. You can then re-parse to get a message
+    /// that contains that correct integrity value.
+    fn serialize_stun_msg(msg: StunMessage<'_>, password: &str) -> Vec<u8> {
         let mut buf = vec![0_u8; DATAGRAM_MTU];
 
-        let n = reply
+        let n = msg
             .to_bytes(password, &mut buf)
-            .expect("IO error writing STUN reply");
+            .expect("IO error writing STUN message");
         buf.truncate(n);
 
         buf

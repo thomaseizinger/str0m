@@ -562,14 +562,11 @@ impl LeakyBucketPacer {
         }
 
         // We must have a queue that supports padding.
-        let Some(queue) = self
+        let queue = self
             .queue_states
             .iter()
             .filter(|q| q.use_for_padding)
-            .max_by_key(|q| q.snapshot.last_emitted)
-        else {
-            return None;
-        };
+            .max_by_key(|q| q.snapshot.last_emitted)?;
 
         // We can generate padding
         let padding = (self.padding_bitrate * PADDING_BURST_INTERVAL).as_bytes_usize();
@@ -1423,9 +1420,7 @@ mod test {
             }
 
             fn pop_packet(&mut self) -> Option<QueuedPacket> {
-                let Some(packet) = self.queue.pop_front() else {
-                    return None;
-                };
+                let packet = self.queue.pop_front()?;
 
                 let time_spent_queued = self
                     .last_update
