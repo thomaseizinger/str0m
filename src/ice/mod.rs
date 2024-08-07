@@ -693,6 +693,41 @@ mod test {
         }));
     }
 
+    #[test]
+    pub fn replacing_pflx_candidate_does_not_invalidate_nomination() {
+        let mut client = TestAgent::new(info_span!("L"));
+        client.set_controlling(true);
+        let mut gateway = TestAgent::new(info_span!("R"));
+        gateway.set_controlling(false);
+
+        client.add_local_candidate(host("1.1.1.1:1000", "udp"));
+        gateway.add_local_candidate(host("2.2.2.2:1000", "udp"));
+
+        client.add_remote_candidate(srflx("2.2.2.2:1000", "2.2.2.2:1000", "udp"));
+        client.add_remote_candidate(host("2.2.2.2:1000", "udp"));
+
+        // loop until we're connected.
+        loop {
+            if client.state().is_connected() && gateway.state().is_connected() {
+                break;
+            }
+            progress(&mut client, &mut gateway);
+        }
+
+        gateway.add_remote_candidate(host("1.1.1.1:1000", "udp"));
+        gateway.add_remote_candidate(srflx("1.1.1.1:1000", "1.1.1.1:1000", "udp"));
+
+        progress(&mut client, &mut gateway);
+        progress(&mut client, &mut gateway);
+        progress(&mut client, &mut gateway);
+        progress(&mut client, &mut gateway);
+        progress(&mut client, &mut gateway);
+        progress(&mut client, &mut gateway);
+
+        assert!(client.state().is_connected());
+        assert!(gateway.state().is_connected());
+    }
+
     pub struct TestAgent {
         pub start_time: Instant,
         pub agent: IceAgent,
